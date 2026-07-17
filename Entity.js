@@ -1,0 +1,35 @@
+/**
+ * Entity.gs
+ * 캐릭터(장수) 객체 모델링 및 상태 초기화 전담
+ */
+
+function initChar(name, camp, troop, pos, force, intel, command, speed, skills, strategies, deck, idx) {
+  if (!name) return null;
+  var f = parseInt(force) || 100;
+  var i = parseInt(intel) || 100;
+  var c = parseInt(command) || 100;
+  var s = parseInt(speed) || 100;
+  
+  return {
+    name: name, camp: camp, troop: troop, position: pos, deck: deck, idx: idx,
+    hp: 10000, maxHp: 10000,
+    force: f, intel: i, command: c, speed: s,
+    baseForce: f, baseIntel: i, baseCommand: c, baseSpeed: s,
+    skills: skills, strategies: strategies,
+    critProb: 0, spellCritProb: 0, dodgeProb: 0, lifestealProb: 0, doubleAttackProb: 0,
+    damageDealtMod: 1.0, damageTakenMod: 1.0, activeRateBonus: 0, pierce: 0, insight: 0,
+    silence: 0, disarm: 0, fear: 0, weakness: 0, confusion: 0, 
+    magicState: 0, stormState: 0, floodState: 0, fireState: 0, grainExhaustState: 0, threatState: 0,
+    shieldStacks: 0, regenState: 0, tauntedBy: null, preparedSkill: null,
+    normalAttackCount: 0, damageDealtThisTurn: 0, damageTakenThisTurn: 0,
+    용담Count: 0, 척살Count: 0, 용의포효Count: 0, 제갈량Count: 0, 신의가호Count: 0, 세금과징수Count: 0, 용맹한삼군Count: 0, 독설가Count: 0,
+    totalDamageDealt: 0, totalDamageTaken: 0, totalHealingDone: 0,
+    도원결의Active: false, 소열제Active: false,
+    
+    // [신규 패치 변수]
+    수전의제왕Count: 0,
+    충신의기재Count: 0,
+    허점공략State: 0,
+    국색State: 0
+  };
+}
