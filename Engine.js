@@ -53,8 +53,8 @@ function simulateBattle() {
     logAction("▶️ [턴 " + turn + " 시작]");
     logAction("---------------------------------------------------------------------");
 
-    allies.forEach(function(c) { c.damageDealtThisTurn = 0; c.damageTakenThisTurn = 0; c.용담Count = 0; c.척살Count = 0; c.용의포효Count = 0; c.제갈량Count = 0; c.신의가호Count = 0; c.세금과징수Count = 0; c.독설가Count = 0; });
-    enemies.forEach(function(c) { c.damageDealtThisTurn = 0; c.damageTakenThisTurn = 0; c.용담Count = 0; c.척살Count = 0; c.용의포효Count = 0; c.제갈량Count = 0; c.신의가호Count = 0; c.세금과징수Count = 0; c.독설가Count = 0; });
+    allies.forEach(function(c) { c.damageDealtThisTurn = 0; c.damageTakenThisTurn = 0; c.용담Count = 0; c.척살Count = 0; c.용의포효Count = 0; c.제갈량Count = 0; c.신의가호Count = 0; c.세금과징수Count = 0; c.독설가Count = 0; c.패잔병척결Count = 0; });
+    enemies.forEach(function(c) { c.damageDealtThisTurn = 0; c.damageTakenThisTurn = 0; c.용담Count = 0; c.척살Count = 0; c.용의포효Count = 0; c.제갈량Count = 0; c.신의가호Count = 0; c.세금과징수Count = 0; c.독설가Count = 0; c.패잔병척결Count = 0; });
     
     triggerTurnStart(allies, enemies, turn);
     triggerTurnStart(enemies, allies, turn);
@@ -82,22 +82,12 @@ function simulateBattle() {
         actor.silence = 0; actor.disarm = 0; actor.fear = 0; actor.weakness = 0;
       }
 
-      if (actor.name === "대교") {
-        var aliveOpp = curEnemies.filter(function(e) { return e.hp > 0; });
-        aliveOpp.sort(function() { return Math.random() - 0.5; }); // 랜덤 타겟팅 추가
-        for (var t = 0; t < Math.min(2, aliveOpp.length); t++) {
-          aliveOpp[t].국색State = 2; // 영구 중첩을 막고 2턴 지속 상태로 변경
-          logAction("🌸 [국색] " + aliveOpp[t].name + "에게 디버프 부여 (2턴간 받는 피해 20% 증가)");
-          onDebuffInflicted(actor, aliveOpp[t], curAllies, curEnemies);
-        }
-      }
-
       if (actor.silence <= 0) {
         for (var s = 0; s < 3; s++) {
           var sName = actor.skills[s];
           if (!sName) continue;
           
-          if (skillTypes[sName] !== undefined && skillTypes[sName].toString().indexOf("액티브") === -1) {
+          if (!skillTypes[sName] || skillTypes[sName].toString().indexOf("액티브") === -1) {
             continue;
           }
           
@@ -120,6 +110,8 @@ function simulateBattle() {
               logAction("🌀 [주도면밀] 곽가의 고유 전법 연쇄! 액티브 전법을 연속 1회 더 즉시 시전합니다.");
               castActiveSkill(sName, actor, curAllies, curEnemies);
             }
+          } else {
+            logAction("  └ 🚫 [발동 실패] '" + sName + "' 전법 발동에 실패했습니다. (확률: " + (prob * 100).toFixed(1) + "%)");
           }
         }
       } else {
@@ -131,7 +123,7 @@ function simulateBattle() {
         if (target) {
           performNormalAttack(actor, target, curAllies, curEnemies);
           var doubleAttackProb = actor.doubleAttackProb;
-          if (actor.skills.indexOf("충신의 기재") !== -1) doubleAttackProb += 0.636;
+          if (actor.skills.indexOf("늠름한 자태") !== -1) doubleAttackProb += 0.636;
           if (Math.random() < doubleAttackProb) {
             logAction("⚡ [연타] " + actor.name + "의 연타 공격 발동!");
             performNormalAttack(actor, target, curAllies, curEnemies);
@@ -288,8 +280,8 @@ function settleStrategyBonus(team) {
 function triggerBattleStart(team, opponent) {
   team.forEach(function(c) {
     if (c.name === "유비") {
-      team.forEach(function(ally) { ally.command += Math.round(18 + c.intel * 0.05); });
-      logAction("👑 [지휘] 유비의 '백성과 함께' 발동! 아군 전체 통솔을 영구 증가시킵니다.");
+      team.forEach(function(ally) { ally.command += 18; });
+      logAction("👑 [지휘] 유비의 '백성과 함께' 발동! 아군 전체 통솔을 18 증가시킵니다.");
     }
     if (c.name === "곽가") {
       c.activeRateBonus = Math.min(0.3, c.activeRateBonus + 0.06);
@@ -315,9 +307,12 @@ function triggerBattleStart(team, opponent) {
     }
     if (c.skills.indexOf("허점 공략") !== -1) { 
       c.허점공략State = 4;
-      var rAlly = team[Math.floor(Math.random() * team.length)];
-      if (rAlly) rAlly.허점공략State = 4;
-      logAction("🛡️ [지휘] 허점 공략 발동! 대상 아군들이 4턴간 받는 피해가 27.5% 감소합니다.");
+      var targetAllies = team.filter(function(a) { return a.name !== c.name; }); // 자신 제외 우군 필터링
+      if (targetAllies.length > 0) {
+        var rAlly = targetAllies[Math.floor(Math.random() * targetAllies.length)];
+        rAlly.허점공략State = 4;
+      }
+      logAction("🛡️ [지휘] 허점 공략 발동! 4턴간 자신과 우군의 받는 피해가 27.56% 감소합니다.");
     }
     if (c.skills.indexOf("정의의 희생") !== -1) { 
       team.forEach(function(ally) { ally.doubleAttackProb = Math.min(0.8, ally.doubleAttackProb + 0.3); });
@@ -353,16 +348,33 @@ function triggerBattleStart(team, opponent) {
       c.spellCritProb += 0.24; 
       logAction("✨ [패시브] '충신의 기재' 적용 (묘책 확률 +24%)"); 
     }
+    if (c.skills.indexOf("침착한 지휘") !== -1) {
+      c.command += 30; // 시작 통솔 고정 증가 (영구 누적 방지)
+      logAction("🛡️ [지휘] 우금의 '침착한 지휘' 발동! 통솔이 30 증가합니다.");
+    }
+    if (c.skills.indexOf("기병 돌격") !== -1) {
+      c.critProb += 0.45; // 15% -> 45% 로 수정
+      logAction("🏇 [패시브] 마초의 회심 확률이 45% 증가합니다.");
+    }
   });
 }
 
 function triggerTurnStart(team, opponent, turn) {
   team.forEach(function(c) {
     if (c.name === "대교") {
+      // 1. 아군 2명 회복
       var aliveTeam = team.filter(function(ally) { return ally.hp > 0; });
-      aliveTeam.sort(function() { return Math.random() - 0.5; }); // 랜덤 타겟팅 추가
+      aliveTeam.sort(function() { return Math.random() - 0.5; });
       for (var t = 0; t < Math.min(2, aliveTeam.length); t++) {
         heal(c, aliveTeam[t], 1.8, "국색");
+      }
+      // 2. 적군 2명 디버프 (이곳으로 이동통합)
+      var aliveOpp = opponent.filter(function(e) { return e.hp > 0; });
+      aliveOpp.sort(function() { return Math.random() - 0.5; }); 
+      for (var t = 0; t < Math.min(2, aliveOpp.length); t++) {
+        aliveOpp[t].국색State = 2;
+        logAction("🌸 [국색] " + aliveOpp[t].name + "에게 디버프 부여 (2턴간 받는 피해 20% 증가)");
+        onDebuffInflicted(c, aliveOpp[t], team, opponent);
       }
     }
     if (c.skills.indexOf("전쟁 종식") !== -1 && turn <= 3) {
@@ -403,7 +415,6 @@ function triggerTurnStart(team, opponent, turn) {
         onDebuffInflicted(c, rEnemy, team, opponent);
       }
     }
-    // [패치] 문과 무 발동 로직
     if (c.skills.indexOf("문과 무") !== -1 && Math.random() < 0.6) {
       var aliveOpp = opponent.filter(function(e) { return e.hp > 0; });
       for (var t = 0; t < Math.min(2, aliveOpp.length); t++) {
@@ -411,6 +422,17 @@ function triggerTurnStart(team, opponent, turn) {
         var dmgType = Math.random() < 0.5 ? '병기' : '책략';
         dealDamage(c, target, 1.5, dmgType, '문과 무', team, opponent);
       }
+    }
+    if (c.skills.indexOf("백리의성") !== -1 && turn === 4) {
+      c.command += 40;
+      logAction("🛡️ [백리의성] 4턴째 발동! 서성의 통솔이 40 증가합니다.");
+      opponent.forEach(function(e) {
+        if (e.hp > 0) {
+          e.floodState = 2;
+          logAction("🌊 [백리의성] 적 " + e.name + "에게 홍수를 2턴 부여합니다.");
+          onDebuffInflicted(c, e, team, opponent);
+        }
+      });
     }
   });
 }
@@ -422,7 +444,7 @@ function triggerTurnEnd(team, opponent, turn) {
       var lowestHpAlly = team.filter(function(ally) { return ally.hp > 0; }).sort(function(x, y) { return x.hp - y.hp; })[0];
       if (lowestHpAlly) {
         lowestHpAlly.damageTakenMod = Math.max(0.5, lowestHpAlly.damageTakenMod - 0.16);
-        lowestHpAlly.regenState = 1;
+        lowestHpAlly.regenState = 2;
         logAction("🩺 [마비산] 화타가 가장 병력이 낮은 " + lowestHpAlly.name + "에게 방어 버프를 부여합니다.");
         heal(c, lowestHpAlly, 2.4, "마비산");
       }
@@ -431,8 +453,20 @@ function triggerTurnEnd(team, opponent, turn) {
       team.forEach(function(ally) { heal(c, ally, 1.0, "백성과 함께"); });
       var lowestHpAlly = team.filter(function(ally) { return ally.hp > 0; }).sort(function(x, y) { return x.hp - y.hp; })[0];
       if (lowestHpAlly) {
-        lowestHpAlly.silence = 0; lowestHpAlly.disarm = 0; lowestHpAlly.fear = 0;
-        logAction("✨ [백성과 함께] 유비가 " + lowestHpAlly.name + "의 모든 제어 효과를 정화합니다!");
+        // 현재 걸려있는 제어 디버프 스캔
+        var debuffs = [];
+        if (lowestHpAlly.silence > 0) debuffs.push('silence');
+        if (lowestHpAlly.disarm > 0) debuffs.push('disarm');
+        if (lowestHpAlly.fear > 0) debuffs.push('fear');
+        if (lowestHpAlly.weakness > 0) debuffs.push('weakness');
+        if (lowestHpAlly.confusion > 0) debuffs.push('confusion');
+        
+        if (debuffs.length > 0) {
+          // 디버프 1개 랜덤 제거
+          var toRemove = debuffs[Math.floor(Math.random() * debuffs.length)];
+          lowestHpAlly[toRemove] = 0;
+          logAction("✨ [백성과 함께] 유비가 " + lowestHpAlly.name + "의 제어 효과 1개를 정화합니다!");
+        }
         heal(c, lowestHpAlly, 0.9, "백성과 함께");
       }
     }

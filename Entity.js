@@ -25,11 +25,13 @@ function initChar(name, camp, troop, pos, force, intel, command, speed, skills, 
     용담Count: 0, 척살Count: 0, 용의포효Count: 0, 제갈량Count: 0, 신의가호Count: 0, 세금과징수Count: 0, 용맹한삼군Count: 0, 독설가Count: 0,
     totalDamageDealt: 0, totalDamageTaken: 0, totalHealingDone: 0,
     도원결의Active: false, 소열제Active: false,
-    
-    // [신규 패치 변수]
+    백발백중: 0, 흥왕의위업State: 0, 
+    감녕무력Buff: [], 손견통솔Debuff: 0, 손견통솔DebuffAmt: 0, 관우액티브Buff: 0, 관우액티브BuffAmt: 0, 청야전술Buff: 0, 강철의의지Buff: 0, 강철의의지DoubleAmt: 0, 강철의의지LifestealAmt: 0,
+    세금과징수Buff: [], 고육지계Buff: 0, 고육지계ReduceAmt: 0,
     수전의제왕Count: 0,
     충신의기재Count: 0,
     허점공략State: 0,
-    국색State: 0
+    국색State: 0,
+    패잔병척결Count: 0,
   };
 }

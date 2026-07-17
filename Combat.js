@@ -30,21 +30,16 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
     return 0;
   }
 
-  if (target.name === "서성" && target.skills.indexOf("백리의성") !== -1 && turn <= 4) {
+  var hasSeoseong = allies.find(function(c) { return c.skills.indexOf("백리의성") !== -1 && c.hp > 0; });
+  if (hasSeoseong && typeof turn !== 'undefined' && turn <= 4 && Math.random() < 0.25) {
     target.shieldStacks++;
-    logAction("🧱 [백리의성] 서성이 피격 직전 방어막을 획득합니다!");
-    enemies.forEach(function(e) {
-        if (e.hp > 0) {
-            e.floodState = 2;
-            onDebuffInflicted(target, e, allies, enemies);
-        }
-    });
+    logAction("🧱 [백리의성] 서성의 지휘! " + target.name + "이(가) 피격 직전 방어막 1스택을 획득했습니다.");
   }
 
   var dodgeChance = target.dodgeProb;
   if (target.name === "조운") dodgeChance = Math.max(dodgeChance, 0.35);
   
-  var ignoreDodge = (source.skills.indexOf("치열한 교전") !== -1 && skillName === "치열한 교전");
+  var ignoreDodge = (source.백발백중 > 0);
   if (!ignoreDodge && Math.random() < dodgeChance) {
     logAction("🛡️ [회피] " + target.name + "이(가) " + source.name + "의 '" + skillName + "' 공격을 회피했습니다!");
     
@@ -94,14 +89,19 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
     if (baseDmg < 50 * coef) baseDmg = 50 * coef;
 
     var critChance = source.critProb;
-    if (Math.random() < critChance) {
+    if (skillName !== '척살' && Math.random() < critChance) {
       baseDmg *= critMult;
-      isCrit = true; // [추가] 회심 플래그 ON
+      isCrit = true; 
       logAction(source.magicState > 0 ? "💥 [회심] 요술에 걸려 회심 피해가 감소(135%)되어 들어갑니다!" : "💥 [회심] " + source.name + "의 회심(물리 크리티컬) 발동!");
-      if (source.name === "마초" && source.척살Count < 5) {
+      
+      // 기병 돌격(마초) 척살 연계 - 통솔 무시 로직 적용
+      if (source.skills.indexOf("기병 돌격") !== -1 && source.척살Count < 5) {
         source.척살Count++;
-        logAction("⚡ [척살] 마초의 고유 전법 연계 척살 추가 피해 발동!");
+        logAction("⚡ [기병 돌격] 회심 적중! 통솔을 100% 무시하는 60% 추가 피해 발동!");
+        var prevPierce = source.pierce;
+        source.pierce = 1.0; // 일시적으로 통솔 무시 100% 적용
         dealDamage(source, target, 0.6, '병기', '척살', allies, enemies);
+        source.pierce = prevPierce; // 공격 후 원상 복구
       }
     }
   } else {
@@ -115,8 +115,12 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
   }
 
   if (target.허점공략State > 0) {
-      baseDmg *= (1 - 0.2756);
+    baseDmg *= (1 - 0.2756);
   }
+  if (target.흥왕의위업State > 0) {
+    baseDmg *= (1 - 0.14);
+  }
+
   if (target.skills.indexOf("위기의 결전") !== -1 && skillName === '일반 공격') {
       baseDmg *= (1 - 0.212);
   }
@@ -170,23 +174,37 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
       logAction("🧠 [충신의 기재] 책략 피해 적중! 지력이 10 상승합니다. (중첩: " + source.충신의기재Count + "/4)");
   }
 
+  if (type === '책략' && source.skills.indexOf("패잔병 척결") !== -1 && source.패잔병척결Count < 1) {
+      if (Math.random() < 0.6) {
+          source.패잔병척결Count++;
+          logAction("⚔️ [패잔병 척결] 책략 피해 적중! " + source.name + "이(가) 60% 확률로 일반 공격을 추가 시전합니다.");
+          var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
+          if (aliveEnemies.length > 0) {
+              var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+              performNormalAttack(source, rEnemy, allies, enemies);
+          }
+      } else {
+          logAction("  └ 🚫 [패잔병 척결] 발동 실패 (확률: 60%)");
+      }
+  }
+
   if (source.lifestealProb > 0) {
     heal(source, source, (finalDmg * source.lifestealProb) / source.intel, '회유');
   }
 
-  var infoGen = allies.find(function(c) { return c.name === "정보" && c.hp > 0; });
+  var infoGen = allies.find(function(c) { return c.skills.indexOf("흥왕의 위업") !== -1 && c.hp > 0; });
   if (infoGen) {
     if (type === '병기' && Math.random() < 0.6) {
       var aliveAllies = allies.filter(function(c) { return c.hp > 0; });
       if (aliveAllies.length > 0) {
         var rAlly = aliveAllies[Math.floor(Math.random() * aliveAllies.length)];
-        logAction("🛡️ [흥왕의 위업] 정보의 보조 지휘 치유 발동!");
-        heal(infoGen, rAlly, (infoGen.intel * 0.4 + infoGen.command * 0.4) / infoGen.intel, '흥왕의 위업');
+        logAction("🛡️ [흥왕의 위업] 정보 치유 발동!");
+        heal(infoGen, rAlly, 0.4, '흥왕의 위업');
       }
     } else if (type === '책략' && Math.random() < 0.6) {
       var rAlly = allies[Math.floor(Math.random() * allies.length)];
-      rAlly.damageTakenMod = Math.max(0.72, rAlly.damageTakenMod - 0.14);
-      logAction("🛡️ [흥왕의 위업] 정보의 보조 지휘 방어막 형성! " + rAlly.name + "의 받는 피해가 14% 감소합니다.");
+      rAlly.흥왕의위업State = 2;
+      logAction("🛡️ [흥왕의 위업] " + rAlly.name + "의 받는 피해가 2턴간 14% 감소합니다.");
     }
   }
 
@@ -226,11 +244,16 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
       dealDamage(target, source, 1.0, '병기', '위기의 결전 (반격)', enemies, allies); 
   }
 
-  if (target.name === "우금" && target.skills.indexOf("침착한 지휘") !== -1) {
-      target.command += 15; 
-      source.damageTakenMod = Math.min(2.0, source.damageTakenMod + 0.15);
-      if (Math.random() < 0.3) source.disarm = 1;
-      logAction("🛡️ [침착한 지휘] 우금이 피격되어 통솔이 증가하고, 공격자에게 디버프를 부여합니다!");
+  if (target.skills.indexOf("침착한 지휘") !== -1 && target.damageTakenThisTurn === 0) {
+      var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
+      aliveEnemies.sort(function() { return Math.random() - 0.5; }); // 랜덤 적 2명 추출
+      for(var t=0; t < Math.min(2, aliveEnemies.length); t++) {
+          aliveEnemies[t].damageTakenMod = Math.min(2.0, aliveEnemies[t].damageTakenMod + 0.1);
+          if (Math.random() < 0.6) {
+              aliveEnemies[t].disarm = 2; // 60% 확률, 2턴간 부여
+              logAction("🛡️ [침착한 지휘] " + aliveEnemies[t].name + "에게 무장해제를 2턴간 부여합니다.");
+          }
+      }
   }
 
   return finalDmg;
@@ -258,13 +281,14 @@ function performNormalAttack(source, target, allies, enemies) {
   if (source.hp <= 0 || target.hp <= 0) return;
   
   var dmgCoef = 1.0;
-  if (source.name === "감녕") {
-      if (source.수전의제왕Count < 4) {
-          source.force += 12;
-          source.수전의제왕Count++;
-      }
+  var currentForce = source.force; // 버프 연산용 임시 변수
+  if (source.skills.indexOf("수전의 제왕") !== -1) {
       dmgCoef = 2.5;
-      logAction("⚓ [수전의 제왕] 감녕 무력 증가 및 일반 공격 데미지 150% 증폭!");
+      if (source.감녕무력Buff.length < 4) {
+          source.감녕무력Buff.push(2); // 2턴 지속 버프 스택 추가
+      }
+      currentForce += (source.감녕무력Buff.length * 12);
+      logAction("⚓ [수전의 제왕] 감녕 무력 증가(현재중첩:" + source.감녕무력Buff.length + ") 및 피해 150% 증폭!");
   }
 
   dealDamage(source, target, dmgCoef, '병기', '일반 공격', allies, enemies);
@@ -274,81 +298,86 @@ function performNormalAttack(source, target, allies, enemies) {
   source.skills.forEach(function(skill) {
     if (!skill) return;
     
-    var rate = 0;
-    if (skill === "무방비 공격") rate = 0.40;
-    else if (skill === "천리기습") rate = 0.40;
-    else if (skill === "원문사극") rate = 0.70;
-    else if (skill === "허점 공격") rate = 0.40;
-    else if (skill === "창고 기습") rate = 0.45;
-    else if (skill === "넘치는 계책") rate = 0.40;
-    else if (skill === "신속전개") rate = 0.40;
-    else if (skill === "경무장") rate = 0.50;
-    else if (skill === "전장 평정") rate = 0.55;
-    else if (skill === "치열한 교전") rate = 0.45; 
+    if (!skillTypes[skill] || skillTypes[skill].toString().indexOf("추격") === -1) {
+      return; 
+    }
 
-    if (rate > 0 && Math.random() < rate) {
-      logAction("⚡ [추격 전법] " + source.name + "의 추격 전법 '" + skill + "' 발동!");
+    var rate = getSkillProb(skill, source.name);
+    if (rate > 0) {
+      if (Math.random() < rate) {
+        logAction("⚡ [추격 전법] " + source.name + "의 추격 전법 '" + skill + "' 발동!");
 
-      if (skill === "남다른 완력") {
-        var extra = (target.force < source.force) ? 0.7 : 0;
-        dealDamage(source, target, 1.5 + extra, '병기', '남다른 완력', allies, enemies);
-      } else if (skill === "치열한 교전") {
-        dealDamage(source, target, 2.5, '병기', '치열한 교전', allies, enemies);
-      } else if (skill === "무방비 공격") { 
-        var lowestHpEnemy = targetDeck.filter(function(c) { return c.hp > 0; }).sort(function(x, y) { return x.hp - y.hp; })[0];
-        if (lowestHpEnemy) {
-            dealDamage(source, lowestHpEnemy, 2.8, '병기', '무방비 공격', allies, enemies);
-            lowestHpEnemy.silence = 1; 
-            lowestHpEnemy.fear = 1;    
-            logAction("🤐💤 [무방비 공격] 대상에게 침묵과 공포를 1턴간 부여합니다.");
-            onDebuffInflicted(source, lowestHpEnemy, allies, enemies);
-        }
-      } else if (skill === "전장 평정") {
-        target.speed = Math.max(0, target.speed - 24);
-        target.force = Math.max(0, target.force - 24);
-        dealDamage(source, target, 1.8, '병기', '전장 평정', allies, enemies);
-        onDebuffInflicted(source, target, allies, enemies);
-      } else if (skill === "천리기습") {
-        var lowestSpeedEnemy = targetDeck.filter(function(c) { return c.hp > 0; }).sort(function(x, y) { return x.speed - y.speed; })[0];
-        if (lowestSpeedEnemy) {
-          var bonus = (lowestSpeedEnemy.idx > 0) ? 3.8 : 2.8;
-          dealDamage(source, lowestSpeedEnemy, bonus, '병기', '천리기습', allies, enemies);
-        }
-      } else if (skill === "원문사극") {
-        dealDamage(source, target, 2.2, '병기', '원문사극', allies, enemies);
-        if (source.idx > 0 && Math.random() < 0.75) source.activeRateBonus = Math.min(0.3, source.activeRateBonus + 0.1);
-      } else if (skill === "허점 공격") {
-        var rEnemy = targetDeck[Math.floor(Math.random() * targetDeck.length)];
-        if (rEnemy) {
-          var bonus = (rEnemy.weakness > 0) ? 1.3 : 1.0;
-          dealDamage(source, rEnemy, 2.8 * bonus, '병기', '허점 공격', allies, enemies);
-          if (rEnemy.weakness <= 0 && Math.random() < 0.65) {
-            rEnemy.weakness = 1;
-            logAction("❌ [허약 부여] " + rEnemy.name + "에게 허약 상태를 1턴 동안 부여합니다.");
-            onDebuffInflicted(source, rEnemy, allies, enemies);
+        if (skill === "남다른 완력") {
+          var extra = (target.force < source.force) ? 0.7 : 0;
+          dealDamage(source, target, 1.5 + extra, '병기', '남다른 완력', allies, enemies);
+        } else if (skill === "치열한 교전") {
+          var lowestHpEnemy = targetDeck.filter(function(c) { return c.hp > 0; }).sort(function(x, y) { return x.hp - y.hp; })[0];
+          if (lowestHpEnemy) {
+            source.백발백중 = 2;
+            dealDamage(source, lowestHpEnemy, 2.8, '병기', '치열한 교전', allies, enemies);
+          }
+        } else if (skill === "무방비 공격") { 
+          dealDamage(source, target, 2.8, '병기', '무방비 공격', allies, enemies);
+          if (target.silence > 0) {
+            if (Math.random() < 0.5) {
+              target.fear = 1;
+              logAction("💤 [무방비 공격] 대상이 이미 침묵 상태이므로 50% 확률로 공포를 1턴 부여합니다.");
+              onDebuffInflicted(source, target, allies, enemies);
+            }
+          } else {
+            target.silence = 1; 
+            logAction("🤐 [무방비 공격] 대상에게 침묵을 1턴 부여합니다.");
+            onDebuffInflicted(source, target, allies, enemies);
+          }
+        } else if (skill === "전장 평정") {
+          target.speed = Math.max(0, target.speed - 24);
+          target.force = Math.max(0, target.force - 24);
+          dealDamage(source, target, 1.8, '병기', '전장 평정', allies, enemies);
+          onDebuffInflicted(source, target, allies, enemies);
+        } else if (skill === "천리기습") {
+          var lowestSpeedEnemy = targetDeck.filter(function(c) { return c.hp > 0; }).sort(function(x, y) { return x.speed - y.speed; })[0];
+          if (lowestSpeedEnemy) {
+            var bonus = (lowestSpeedEnemy.idx > 0) ? 3.8 : 2.8;
+            dealDamage(source, lowestSpeedEnemy, bonus, '병기', '천리기습', allies, enemies);
+          }
+        } else if (skill === "원문사극") {
+          dealDamage(source, target, 2.2, '병기', '원문사극', allies, enemies);
+          if (source.idx > 0 && Math.random() < 0.75) source.activeRateBonus = Math.min(0.3, source.activeRateBonus + 0.1);
+        } else if (skill === "허점 공격") {
+          var rEnemy = targetDeck[Math.floor(Math.random() * targetDeck.length)];
+          if (rEnemy) {
+            var bonus = (rEnemy.weakness > 0) ? 1.3 : 1.0;
+            dealDamage(source, rEnemy, 2.8 * bonus, '병기', '허점 공격', allies, enemies);
+            if (rEnemy.weakness <= 0 && Math.random() < 0.65) {
+              rEnemy.weakness = 1;
+              logAction("❌ [허약 부여] " + rEnemy.name + "에게 허약 상태를 1턴 동안 부여합니다.");
+              onDebuffInflicted(source, rEnemy, allies, enemies);
+            }
+          }
+        } else if (skill === "창고 기습") {
+          var bonus = (target.grainExhaustState > 0) ? 1.0 : 0;
+          dealDamage(source, target, 3.0 + bonus, '책략', '창고 기습', allies, enemies);
+          target.grainExhaustState = 2;
+          onDebuffInflicted(source, target, allies, enemies);
+        } else if (skill === "넘치는 계책") {
+          var backRow = targetDeck.filter(function(c) { return c.idx > 0 && c.hp > 0; });
+          var finalTarget = backRow.length > 0 ? backRow[Math.floor(Math.random() * backRow.length)] : target;
+          dealDamage(source, finalTarget, 2.5, '책략', '넘치는 계책', allies, enemies);
+        } else if (skill === "신속전개") {
+          source.speed += 30;
+          var aliveEnemies = targetDeck.filter(function(c) { return c.hp > 0; });
+          for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
+            dealDamage(source, aliveEnemies[t], 1.8, '병기', '신속전개', allies, enemies);
+          }
+        } else if (skill === "경무장") {
+          var aliveAllies = sourceDeck.filter(function(c) { return c.hp > 0; });
+          for (var t = 0; t < Math.min(2, aliveAllies.length); t++) {
+            aliveAllies[t].shieldStacks++;
+            aliveAllies[t].damageTakenMod = Math.max(0.5, aliveAllies[t].damageTakenMod - 0.2);
           }
         }
-      } else if (skill === "창고 기습") {
-        var bonus = (target.grainExhaustState > 0) ? 1.0 : 0;
-        dealDamage(source, target, 3.0 + bonus, '책략', '창고 기습', allies, enemies);
-        target.grainExhaustState = 2;
-        onDebuffInflicted(source, target, allies, enemies);
-      } else if (skill === "넘치는 계책") {
-        var backRow = targetDeck.filter(function(c) { return c.idx > 0 && c.hp > 0; });
-        var finalTarget = backRow.length > 0 ? backRow[Math.floor(Math.random() * backRow.length)] : target;
-        dealDamage(source, finalTarget, 2.5, '책략', '넘치는 계책', allies, enemies);
-      } else if (skill === "신속전개") {
-        source.speed += 30;
-        var aliveEnemies = targetDeck.filter(function(c) { return c.hp > 0; });
-        for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
-          dealDamage(source, aliveEnemies[t], 1.8, '병기', '신속전개', allies, enemies);
-        }
-      } else if (skill === "경무장") {
-        var aliveAllies = sourceDeck.filter(function(c) { return c.hp > 0; });
-        for (var t = 0; t < Math.min(2, aliveAllies.length); t++) {
-          aliveAllies[t].shieldStacks++;
-          aliveAllies[t].damageTakenMod = Math.max(0.5, aliveAllies[t].damageTakenMod - 0.2);
-        }
+      } else {
+        logAction("  └ 🚫 [추격 실패] '" + skill + "' 전법 발동에 실패했습니다. (확률: " + (rate * 100).toFixed(1) + "%)");
       }
     }
   });

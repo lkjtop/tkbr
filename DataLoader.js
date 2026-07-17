@@ -60,7 +60,12 @@ function loadGameData(ss, sheet) {
     var skillData = skillSheet.getDataRange().getValues();
     for (var i = 2; i < skillData.length; i++) {
       if (skillData[i][2]) {
-        skillRates[skillData[i][2]] = (parseFloat(skillData[i][4].toString().replace("%", "")) || 35) / 100;
+        var rawRate = skillData[i][4];
+        // 셀 값이 숫자(0.65)면 그대로, 문자면 숫자로 변환
+        var rate = typeof rawRate === 'number' ? rawRate : parseFloat(rawRate.toString().replace("%", ""));
+        if (isNaN(rate)) rate = 35; // 기본값 35%
+        // 1.0보다 크면(예: 65) 100으로 나누고, 이미 소수점(0.65)이면 그대로 저장
+        skillRates[skillData[i][2]] = rate > 1.0 ? rate / 100 : rate;
         skillTypes[skillData[i][2]] = skillData[i][3];
       }
     }
@@ -71,13 +76,18 @@ function loadGameData(ss, sheet) {
     var genData = generalSheet.getDataRange().getValues();
     for (var i = 2; i < genData.length; i++) {
       if (genData[i][1]) {
-        uniqueRates[genData[i][1]] = (parseFloat(genData[i][11].toString().replace("%", "")) || 40) / 100;
+        var rawRate = genData[i][11];
+        // 고유 전법 확률 동일하게 안전 변환 처리
+        var rate = typeof rawRate === 'number' ? rawRate : parseFloat(rawRate.toString().replace("%", ""));
+        if (isNaN(rate)) rate = 40; // 기본값 40%
+        uniqueRates[genData[i][1]] = rate > 1.0 ? rate / 100 : rate;
         if (genData[i][9]) {
           skillTypes[genData[i][8]] = genData[i][9]; 
         }
       }
     }
   }
+
   return true;
 }
 

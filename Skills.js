@@ -9,13 +9,32 @@ function onDebuffInflicted(source, target, sourceTeam, targetTeam) {
   if (source.skills.indexOf("세금 과징수") !== -1) {
     if (source.세금과징수Count < 10) {
       source.세금과징수Count++;
-      var healAmt = Math.round(source.intel * 0.4 + source.command * 0.4);
+      
+      // 1. 치유량 계산 정상화 (지력 40%)
+      var healAmt = Math.round(source.intel * 0.4); 
       healAmt = Math.min(healAmt, source.maxHp - source.hp);
       source.hp += healAmt;
       source.totalHealingDone += healAmt;
       logAction("💰 [세금 과징수] 디버프 부여 후 자가 치유 발동! " + source.name + "의 병력을 " + healAmt + " 회복시켰습니다. (턴 내 발동: " + source.세금과징수Count + "/10)");
-      source.damageTakenMod = Math.max(0.6, source.damageTakenMod - 0.1);
-      logAction("  └ " + source.name + "의 받는 피해가 10% 감소합니다. (현재 받는 피해 배율: " + source.damageTakenMod.toFixed(2) + ")");
+      
+      // 2. 2턴 지속, 최대 4스택 버프 로직
+      if (!source.세금과징수Buff) source.세금과징수Buff = [];
+      if (source.세금과징수Buff.length < 4) {
+        source.세금과징수Buff.push(2); // 2턴 지속시간 추가
+        source.damageTakenMod -= 0.1; // 피해 감소 10%
+        logAction("  └ " + source.name + "의 받는 피해가 2턴간 10% 감소합니다. (현재 중첩: " + source.세금과징수Buff.length + "/4)");
+      } else {
+        // 이미 4스택이면 지속시간이 짧은 스택을 갱신
+        var refreshed = false;
+        for(var i=0; i<source.세금과징수Buff.length; i++) {
+          if(source.세금과징수Buff[i] < 2) {
+            source.세금과징수Buff[i] = 2;
+            refreshed = true;
+            break;
+          }
+        }
+        if (refreshed) logAction("  └ " + source.name + "의 '세금 과징수' 방어 버프 지속시간이 갱신되었습니다.");
+      }
     }
   }
   
@@ -84,10 +103,13 @@ function castActiveSkill(skill, source, allies, enemies) {
       break;
     case "무열황제":
       var commandDiff = target.command > source.command;
-      target.command = Math.max(0, target.command - (commandDiff ? 60 : 40));
+      var reduction = commandDiff ? 60 : 40;
+      target.손견통솔Debuff = 2;
+      target.손견통솔DebuffAmt = reduction;
+      target.command = Math.max(0, target.command - reduction); // 2턴 지속으로 변경됨
       dealDamage(source, target, 2.5, '병기', '무열황제', allies, enemies);
       target.fear = 1;
-      logAction("💤 [공포 부여] " + target.name + "에게 공포 상태를 1턴 동안 부여합니다.");
+      logAction("💤 [무열황제] " + target.name + "의 통솔을 " + reduction + " 감소시키고 공포를 1턴 부여합니다.");
       onDebuffInflicted(source, target, allies, enemies);
       break;
     case "백의도강":
@@ -108,14 +130,36 @@ function castActiveSkill(skill, source, allies, enemies) {
       if (rAlly) heal(source, rAlly, 0.65, "강동 제패");
       break;
     case "고육지계":
-      source.damageTakenMod = Math.max(0.4, source.damageTakenMod - 0.3);
-      var sortedAllies = [].concat(aliveAllies).sort(function(x, y) { return y.intel - x.intel; });
-      var highIntel = sortedAllies[0];
-      if (highIntel) dealDamage(highIntel, source, 0.6, '병기', '고육지계', allies, enemies);
-      for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
-        dealDamage(source, aliveEnemies[t], 2.2, '책략', '고육지계', allies, enemies);
-        aliveEnemies[t].fireState = 2;
-        onDebuffInflicted(source, aliveEnemies[t], allies, enemies);
+      // 1. 통솔 비례 피해 감소량 연산 (기본 30% + 통솔 1당 0.03% 추가 감소 예시)
+      // *주의: 0.0003 부분은 기획하신 통솔 계수에 맞춰 수정하시면 됩니다.
+      var reduceAmt = 0.3 + (source.command * 0.0003); 
+
+      if (source.고육지계Buff <= 0) {
+        source.damageTakenMod = Math.max(0.2, source.damageTakenMod - reduceAmt);
+        source.고육지계Buff = 2; // 2턴 지속
+        source.고육지계ReduceAmt = reduceAmt; // 차감을 위해 정확한 수치 저장
+        logAction("🛡️ [고육지계] 황개가 2턴간 받는 피해를 " + (reduceAmt*100).toFixed(1) + "% 감소시킵니다. (통솔 비례)");
+      } else {
+        source.고육지계Buff = 2; // 이미 버프가 있다면 턴수만 갱신
+        logAction("🛡️ [고육지계] 버프 지속시간이 2턴으로 갱신되었습니다.");
+      }
+
+      // 2. 지력이 가장 높은 '우군' (자신 제외) 찾기
+      var targetAllies = aliveAllies.filter(function(a) { return a.name !== source.name; });
+      targetAllies.sort(function(x, y) { return y.intel - x.intel; });
+      var highIntel = targetAllies[0];
+      
+      if (highIntel) {
+        logAction("🩸 [고육지계 연계] 지력이 가장 높은 우군 " + highIntel.name + "이(가) 황개에게 피해를 입힙니다!");
+        dealDamage(highIntel, source, 0.6, '병기', '고육지계 (우군 타격)', allies, enemies);
+      }
+
+      // 3. 랜덤 적군 2명 타격 및 화공 부여
+      var targetEnemies = [].concat(aliveEnemies).sort(function() { return Math.random() - 0.5; }); // 랜덤 셔플
+      for (var t = 0; t < Math.min(2, targetEnemies.length); t++) {
+        dealDamage(source, targetEnemies[t], 2.2, '책략', '고육지계', allies, enemies);
+        targetEnemies[t].fireState = 2;
+        onDebuffInflicted(source, targetEnemies[t], allies, enemies);
       }
       break;
     case "적진 돌파":
@@ -152,14 +196,16 @@ function castActiveSkill(skill, source, allies, enemies) {
       break;
     case "화하 진압":
       var threatCount = aliveEnemies.filter(function(e) { return e.threatState > 0; }).length;
-      source.activeRateBonus = Math.min(0.3, source.activeRateBonus + 0.08 + threatCount * 0.03);
+      source.관우액티브Buff = 2;
+      source.관우액티브BuffAmt = 0.08 + threatCount * 0.03;
+      source.activeRateBonus += source.관우액티브BuffAmt; // 2턴 지속으로 변경됨
       aliveEnemies.forEach(function(enemy) {
         dealDamage(source, enemy, 1.8, '병기', '화하 진압', allies, enemies);
-        if (enemy.silence > 0 || enemy.disarm > 0 || enemy.fear > 0) {
-          enemy.grainExhaustState = 2;
+        if (enemy.silence > 0 || enemy.disarm > 0 || enemy.fear > 0 || enemy.weakness > 0 || enemy.confusion > 0) {
+          enemy.grainExhaustState = 2; // (탈주병 대체)
           onDebuffInflicted(source, enemy, allies, enemies);
         }
-      });
+      }); 
       break;
     case "겸손한 자세":
       var dmgType = (target.force > target.intel) ? '병기' : '책략';
@@ -223,6 +269,7 @@ function castActiveSkill(skill, source, allies, enemies) {
         onDebuffInflicted(source, e, allies, enemies);
       });
       source.command += 36;
+      source.청야전술Buff = 2;
       break;
     case "적군 굴복":
       for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
@@ -288,10 +335,33 @@ function castActiveSkill(skill, source, allies, enemies) {
       }
       break;
     case "강철의 의지":
-      for (var t = 0; t < Math.min(2, aliveAllies.length); t++) {
-        var ally = aliveAllies[t];
-        ally.doubleAttackProb = Math.min(0.8, ally.doubleAttackProb + 0.45);
-        ally.lifestealProb = Math.min(0.5, ally.lifestealProb + 0.2);
+      // 1. 우군(자신 제외 아군) 필터링
+      var targetAllies = aliveAllies.filter(function(a) { return a.name !== source.name; });
+      if (targetAllies.length === 0) targetAllies = aliveAllies; // 만약 남은 우군이 없으면 자신 포함
+      
+      // 2. 랜덤 대상 선정을 위해 셔플
+      targetAllies.sort(function() { return Math.random() - 0.5; });
+      
+      for (var t = 0; t < Math.min(2, targetAllies.length); t++) {
+        var ally = targetAllies[t];
+        
+        if (ally.강철의의지Buff > 0) {
+          ally.강철의의지Buff = 2; // 이미 버프가 있다면 턴수만 갱신 (수치 중복 적용 방지)
+          logAction("🛡️ [강철의 의지] " + ally.name + "의 버프 지속시간이 2턴으로 갱신되었습니다.");
+        } else {
+          var prevDouble = ally.doubleAttackProb;
+          var prevLife = ally.lifestealProb;
+          
+          ally.doubleAttackProb = Math.min(0.8, ally.doubleAttackProb + 0.45);
+          ally.lifestealProb = Math.min(0.5, ally.lifestealProb + 0.2);
+          
+          // 상한선(0.8, 0.5) 때문에 '실제로 올라간 수치'만큼만 기록
+          ally.강철의의지DoubleAmt = ally.doubleAttackProb - prevDouble;
+          ally.강철의의지LifestealAmt = ally.lifestealProb - prevLife;
+          ally.강철의의지Buff = 2;
+          
+          logAction("🛡️ [강철의 의지] " + ally.name + "에게 2턴간 연타 및 회유 증가 버프를 부여합니다.");
+        }
       }
       break;
     case "기문둔갑":
@@ -395,5 +465,56 @@ function decayStatusEffects(characters) {
     if (c.regenState > 0) c.regenState--;
     if (c.허점공략State > 0) c.허점공략State--;
     if (c.국색State > 0) c.국색State--;
+      if (c.백발백중 > 0) c.백발백중--;
+    if (c.흥왕의위업State > 0) c.흥왕의위업State--;
+    if (c.감녕무력Buff && c.감녕무력Buff.length > 0) {
+      for (var i = c.감녕무력Buff.length - 1; i >= 0; i--) {
+        c.감녕무력Buff[i]--;
+        if (c.감녕무력Buff[i] <= 0) c.감녕무력Buff.splice(i, 1);
+      }
+    } 
+    if (c.손견통솔Debuff > 0) {
+      c.손견통솔Debuff--;
+      if (c.손견통솔Debuff === 0) c.command += c.손견통솔DebuffAmt;
+    }
+    if (c.관우액티브Buff > 0) {
+      c.관우액티브Buff--;
+      if (c.관우액티브Buff === 0) c.activeRateBonus -= c.관우액티브BuffAmt;
+    }
+    if (c.청야전술Buff > 0) {
+      c.청야전술Buff--;
+      if (c.청야전술Buff === 0) {
+        c.command = Math.max(0, c.command - 36);
+        logAction("🔻 [버프 종료] " + c.name + "의 '청야 전술' 지속시간이 만료되어 통솔(36)이 원상 복구되었습니다.");
+      }
+    }
+    if (c.강철의의지Buff > 0) {
+      c.강철의의지Buff--;
+      if (c.강철의의지Buff === 0) {
+        c.doubleAttackProb -= c.강철의의지DoubleAmt;
+        c.lifestealProb -= c.강철의의지LifestealAmt;
+        c.강철의의지DoubleAmt = 0; // 기록 초기화
+        c.강철의의지LifestealAmt = 0;
+        logAction("🔻 [버프 종료] " + c.name + "의 '강철의 의지' 지속시간이 만료되어 연타 및 회유가 원상 복구되었습니다.");
+      }
+    }
+    if (c.세금과징수Buff && c.세금과징수Buff.length > 0) {
+      for (var i = c.세금과징수Buff.length - 1; i >= 0; i--) {
+        c.세금과징수Buff[i]--;
+        if (c.세금과징수Buff[i] <= 0) {
+          c.세금과징수Buff.splice(i, 1);
+          c.damageTakenMod += 0.1;
+          logAction("🔻 [버프 종료] " + c.name + "의 '세금 과징수' 1스택이 만료되어 받는 피해가 10% 증가(원상 복구)했습니다.");
+        }
+      }
+    }
+    if (c.고육지계Buff > 0) {
+      c.고육지계Buff--;
+      if (c.고육지계Buff === 0) {
+        c.damageTakenMod += c.고육지계ReduceAmt;
+        c.고육지계ReduceAmt = 0;
+        logAction("🔻 [버프 종료] " + c.name + "의 '고육지계'가 만료되어 받는 피해 감소 효과가 원상 복구되었습니다.");
+      }
+    }
   });
 }
