@@ -60,7 +60,11 @@ function simulateBattle() {
     triggerTurnStart(enemies, allies, turn);
 
     var queue = allies.concat(enemies).filter(function(c) { return c.hp > 0; });
-    queue.sort(function(x, y) { return y.speed - x.speed; });
+    queue.sort(function(x, y) {
+      var xSpeed = x.speed - (x.stormState > 0 ? 30 : 0);
+      var ySpeed = y.speed - (y.stormState > 0 ? 30 : 0);
+      return ySpeed - xSpeed;
+    });
 
     logAction("📢 행동 순서 판정: " + queue.map(function(c) { return c.name + "(" + c.speed + ")"; }).join(" ➔ "));
 
@@ -69,9 +73,13 @@ function simulateBattle() {
       if (actor.hp <= 0) continue;
 
       logAction("👉 [" + actor.name + " (" + actor.deck + "덱)] 행동 시작 (현재 병력: " + actor.hp + ")");
-      if (actor.fear > 0) {
+
+      // [공포 면역 패치]
+      if (actor.fear > 0 && actor.regenState <= 0) {
         logAction("💤 [공포] " + actor.name + "은(는) 공포 상태로 행동 불능입니다.");
         continue;
+      } else if (actor.fear > 0 && actor.regenState > 0) {
+        logAction("✨ [정신 회복] " + actor.name + "이(가) 정신 회복으로 공포 상태를 일시 무효화합니다.");
       }
 
       var curAllies = (actor.deck === 'A') ? allies : enemies;
@@ -82,7 +90,9 @@ function simulateBattle() {
         actor.silence = 0; actor.disarm = 0; actor.fear = 0; actor.weakness = 0;
       }
 
-      if (actor.silence <= 0) {
+      
+      if (actor.silence <= 0 || actor.regenState > 0) {
+        if (actor.silence > 0) logAction("✨ [정신 회복] " + actor.name + "이(가) 정신 회복으로 침묵을 무효화하고 액티브를 시전합니다.");
         for (var s = 0; s < 3; s++) {
           var sName = actor.skills[s];
           if (!sName) continue;
@@ -118,7 +128,9 @@ function simulateBattle() {
         logAction("🤐 [침묵] " + actor.name + "은(는) 침묵 상태로 액티브 전법을 사용할 수 없습니다.");
       }
 
-      if (actor.disarm <= 0) {
+      // [무장 해제 면역 패치]
+      if (actor.disarm <= 0 || actor.regenState > 0) {
+        if (actor.disarm > 0) logAction("✨ [정신 회복] " + actor.name + "이(가) 정신 회복으로 무장 해제를 무효화하고 무기를 듭니다.");
         var target = getAttackTarget(actor, curEnemies);
         if (target) {
           performNormalAttack(actor, target, curAllies, curEnemies);
@@ -142,16 +154,30 @@ function simulateBattle() {
     decayStatusEffects(allies.concat(enemies));
   }
 
+  // [전투 루프 종료 후 승패 판정 로직]
   var aHp = allies.reduce(function(x, y) { return x + Math.max(0, y.hp); }, 0);
   var bHp = enemies.reduce(function(x, y) { return x + Math.max(0, y.hp); }, 0);
+  
   var winner = "무승부";
-  if (aHp > bHp) winner = "A 덱";
-  else if (bHp > aHp) winner = "B 덱";
+  
+  // 8턴 종료 시점에서 한쪽이 완전히 전멸(0)했을 때만 승리, 둘 다 살아있으면 무승부
+  if (aHp > 0 && bHp === 0) {
+    winner = "A 덱";
+  } else if (bHp > 0 && aHp === 0) {
+    winner = "B 덱";
+  } else {
+    winner = "무승부";
+  }
 
   logAction("=====================================================================");
-  logAction("🏆 전투 종료! 승리: " + winner + " (진행 턴수: " + Math.min(turn, 8) + ")");
+  if (winner === "무승부") {
+    logAction("🤝 전투 종료! 8턴 내에 어느 한쪽도 전멸하지 않아 무승부(Draw) 처리됩니다. (진행 턴수: " + Math.min(turn, 8) + ")");
+  } else {
+    logAction("🏆 전투 종료! 승리: " + winner + " (진행 턴수: " + Math.min(turn, 8) + ")");
+  }
   logAction("A덱 최종 합계 병력: " + aHp + " | B덱 최종 합계 병력: " + bHp);
   logAction("=====================================================================");
+  
   return {
     winner: winner, turns: Math.min(turn, 8),
     allies: allies, enemies: enemies
@@ -240,27 +266,49 @@ function settleBondBonus(team, bonds) {
 
 function settleFormationBonus(team, formation) {
   if (!formation) return;
+  
   team.forEach(function(c) {
+    // 1. 덱 빌더 배치 순서(장수1=idx0, 장수2=idx1, 장수3=idx2)에 따른 위치 및 피격률 강제 매칭
+    if (formation.indexOf("일자진") !== -1) {
+      c.position = "전열";
+      c.hitWeight = (c.idx === 1) ? 34 : 33;
+    } else if (formation.indexOf("기형진") !== -1 || formation.indexOf("어린진") !== -1) {
+      c.position = (c.idx === 0) ? "전열" : "후열";
+      c.hitWeight = (c.idx === 0) ? 60 : 20;
+    } else if (formation.indexOf("안형진") !== -1) {
+      c.position = (c.idx === 0) ? "후열" : "전열";
+      c.hitWeight = (c.idx === 0) ? 20 : 40;
+    } else if (formation.indexOf("방원진") !== -1) {
+      c.position = (c.idx === 2) ? "후열" : "전열";
+      c.hitWeight = (c.idx === 2) ? 20 : 40;
+    } else if (formation.indexOf("추형진") !== -1) {
+      c.position = (c.idx === 1) ? "전열" : "후열";
+      c.hitWeight = (c.idx === 1) ? 60 : 20;
+    } else {
+      c.hitWeight = 33;
+    }
+
     var isFront = (c.position === "전열");
     var isBack = (c.position === "후열");
 
+    // 2. 진형 스탯 버프 결산
     if (formation.indexOf("일자진") !== -1) {
-      if (isFront) { c.damageTakenMod *= 0.92; logAction("📐 [진형 결산] " + c.name + ": 일자진 전열 배치 (받는 피해 8% 감소)"); }
+      if (isFront) { c.damageTakenMod *= 0.92; logAction("📐 [진형 결산] " + c.name + ": 일자진 " + c.position + " 배치 (받는 피해 8% 감소, 피격률 " + c.hitWeight + "%)"); }
     } else if (formation.indexOf("기형진") !== -1) {
-      if (isFront) { c.damageTakenMod *= 0.94; logAction("📐 [진형 결산] " + c.name + ": 기형진 전열 배치 (받는 피해 6% 감소)"); }
-      if (isBack) { c.damageDealtMod *= 1.12; logAction("📐 [진형 결산] " + c.name + ": 기형진 후열 배치 (주는 피해 12% 증가)"); }
+      if (isFront) { c.damageTakenMod *= 0.94; logAction("📐 [진형 결산] " + c.name + ": 기형진 전열 배치 (받는 피해 6% 감소, 피격률 " + c.hitWeight + "%)"); }
+      if (isBack) { c.damageDealtMod *= 1.12; logAction("📐 [진형 결산] " + c.name + ": 기형진 후열 배치 (주는 피해 12% 증가, 피격률 " + c.hitWeight + "%)"); }
     } else if (formation.indexOf("안형진") !== -1) {
-      if (isFront) { c.command += 20; logAction("📐 [진형 결산] " + c.name + ": 안형진 전열 배치 (통솔 +20)"); }
-      if (isBack) { c.damageDealtMod *= 1.15; logAction("📐 [진형 결산] " + c.name + ": 안형진 후열 배치 (주는 피해 15% 증가)"); }
+      if (isFront) { c.command += 20; logAction("📐 [진형 결산] " + c.name + ": 안형진 전열 배치 (통솔 +20, 피격률 " + c.hitWeight + "%)"); }
+      if (isBack) { c.damageDealtMod *= 1.15; logAction("📐 [진형 결산] " + c.name + ": 안형진 후열 배치 (주는 피해 15% 증가, 피격률 " + c.hitWeight + "%)"); }
     } else if (formation.indexOf("방원진") !== -1) {
-      if (isFront) { c.damageTakenMod *= 0.95; logAction("📐 [진형 결산] " + c.name + ": 방원진 전열 배치 (받는 피해 5% 감소)"); }
-      if (isBack) { c.doubleAttackProb += 0.40; logAction("📐 [진형 결산] " + c.name + ": 방원진 후열 배치 (연타 확률 +40%)"); }
+      if (isFront) { c.damageTakenMod *= 0.95; logAction("📐 [진형 결산] " + c.name + ": 방원진 전열 배치 (받는 피해 5% 감소, 피격률 " + c.hitWeight + "%)"); }
+      if (isBack) { c.doubleAttackProb += 0.40; logAction("📐 [진형 결산] " + c.name + ": 방원진 후열 배치 (연타 확률 +40%, 피격률 " + c.hitWeight + "%)"); }
     } else if (formation.indexOf("추형진") !== -1) {
-      if (isFront) { c.damageDealtMod *= 1.16; logAction("📐 [진형 결산] " + c.name + ": 추형진 전열 배치 (주는 피해 16% 증가)"); }
-      if (isBack) { c.damageTakenMod *= 0.95; logAction("📐 [진형 결산] " + c.name + ": 추형진 후열 배치 (받는 피해 5% 감소)"); }
+      if (isFront) { c.damageDealtMod *= 1.16; logAction("📐 [진형 결산] " + c.name + ": 추형진 전열 배치 (주는 피해 16% 증가, 피격률 " + c.hitWeight + "%)"); }
+      if (isBack) { c.damageTakenMod *= 0.95; logAction("📐 [진형 결산] " + c.name + ": 추형진 후열 배치 (받는 피해 5% 감소, 피격률 " + c.hitWeight + "%)"); }
     } else if (formation.indexOf("어린진") !== -1) {
-      if (isFront) { c.dodgeProb += 0.12; logAction("📐 [진형 결산] " + c.name + ": 어린진 전열 배치 (회피 확률 +12%)"); }
-      if (isBack) { c.critProb += 0.08; c.spellCritProb += 0.08; logAction("📐 [진형 결산] " + c.name + ": 어린진 후열 배치 (회심/묘책 확률 +8%)"); }
+      if (isFront) { c.dodgeProb += 0.12; logAction("📐 [진형 결산] " + c.name + ": 어린진 전열 배치 (회피 확률 +12%, 피격률 " + c.hitWeight + "%)"); }
+      if (isBack) { c.critProb += 0.08; c.spellCritProb += 0.08; logAction("📐 [진형 결산] " + c.name + ": 어린진 후열 배치 (회심/묘책 확률 +8%, 피격률 " + c.hitWeight + "%)"); }
     }
   });
 }
@@ -279,6 +327,11 @@ function settleStrategyBonus(team) {
 
 function triggerBattleStart(team, opponent) {
   team.forEach(function(c) {
+    if (c.skills.indexOf("초선차전") !== -1) {
+      // 기획 DB의 심리 공격 흡혈률에 맞춰 수치를 조절하세요 (예: 50% 흡혈이면 0.5)
+      c.psyLifestealProb += 0.24; 
+      logAction("🧠 [패시브] 제갈량의 '초선차전' 적용! 24% 심리 공격(책략 피해 흡혈) 버프를 획득합니다.");
+    }
     if (c.name === "유비") {
       team.forEach(function(ally) { ally.command += 18; });
       logAction("👑 [지휘] 유비의 '백성과 함께' 발동! 아군 전체 통솔을 18 증가시킵니다.");
@@ -296,7 +349,7 @@ function triggerBattleStart(team, opponent) {
       logAction("✨ [패시브] '신의 가호' 발동! " + c.name + "의 액티브 전법 발동률이 8% 증가합니다.");
     }
     if (c.skills.indexOf("결사의 다짐") !== -1) { 
-      var frontRow = team.find(function(ally) { return ally.idx === 0; }) || team[0];
+      var frontRow = team.find(function(ally) { return ally.position === "전열"; }) || team[0];
       if (frontRow) {
         frontRow.damageTakenMod = Math.max(0.6, frontRow.damageTakenMod - 0.2);
         logAction("🛡️ [지휘] 결사의 다짐 발동! 전열 무장의 받는 피해가 20% 감소합니다.");
@@ -368,10 +421,8 @@ function triggerTurnStart(team, opponent, turn) {
       for (var t = 0; t < Math.min(2, aliveTeam.length); t++) {
         heal(c, aliveTeam[t], 1.8, "국색");
       }
-      // 2. 적군 2명 디버프 (이곳으로 이동통합)
-      var aliveOpp = opponent.filter(function(e) { return e.hp > 0; });
-      aliveOpp.sort(function() { return Math.random() - 0.5; }); 
-      for (var t = 0; t < Math.min(2, aliveOpp.length); t++) {
+      var aliveOpp = getWeightedRandomTargets(opponent.filter(function(e) { return e.hp > 0; }), 2);
+      for (var t = 0; t < aliveOpp.length; t++) {
         aliveOpp[t].국색State = 2;
         logAction("🌸 [국색] " + aliveOpp[t].name + "에게 디버프 부여 (2턴간 받는 피해 20% 증가)");
         onDebuffInflicted(c, aliveOpp[t], team, opponent);
@@ -471,7 +522,7 @@ function triggerTurnEnd(team, opponent, turn) {
       }
     }
     if (c.skills.indexOf("평화의 기운") !== -1) { 
-      var frontRow = team.find(function(ally) { return ally.idx === 0 && ally.hp > 0; });
+      var frontRow = team.find(function(ally) { return ally.position === "전열" && ally.hp > 0; });
       if (frontRow) heal(c, frontRow, 0.954, "평화의 기운");
     }
     if (c.skills.indexOf("보급 차단") !== -1) {
@@ -480,9 +531,6 @@ function triggerTurnEnd(team, opponent, turn) {
           dealDamage(c, enemy, 1.1, '책략', '보급 차단 (종료 피해)', team, opponent);
         }
       });
-    }
-    if (c.regenState > 0) {
-      heal(c, c, 1.0, "정신 회복");
     }
   });
 }

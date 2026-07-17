@@ -52,9 +52,22 @@ function runSimulation() {
     bRec[i] = Math.round(bRec[i]/simCount); bHeal[i] = Math.round(bHeal[i]/simCount);
   }
 
+  // 승률 및 무승부 비율 계산
   var aWinRate = ((aWins / simCount) * 100).toFixed(1);
   var bWinRate = ((bWins / simCount) * 100).toFixed(1);
-  var multiWinnerStr = aWins > bWins ? "A 덱 우세 (" + aWinRate + "% 승리)" : bWins > aWins ? "B 덱 우세 (" + bWinRate + "% 승리)" : "호각세";
+  var drawCount = simCount - aWins - bWins;
+  var drawRate = ((drawCount / simCount) * 100).toFixed(1);
+  
+  // 상세 결과 문자열 조합 (예: A 30.5% / B 20.0% / 무승부 49.5%)
+  var statStr = "A " + aWinRate + "% / B " + bWinRate + "% / 무승부 " + drawRate + "%";
+  
+  // 최종 표기 문자열 결정
+  var multiWinnerStr = "호각세 (" + statStr + ")";
+  if (aWins > bWins) {
+    multiWinnerStr = "A덱 우세 (" + statStr + ")";
+  } else if (bWins > aWins) {
+    multiWinnerStr = "B덱 우세 (" + statStr + ")";
+  }
   
   // 결과 쓰기 함수 호출
   writeMultiResults(sheet, multiWinnerStr, totalTurns/simCount, aHp, aDmg, aRec, aHeal, bHp, bDmg, bRec, bHeal);

@@ -65,7 +65,11 @@ function castActiveSkill(skill, source, allies, enemies) {
   var aliveAllies = sourceDeck.filter(function(c) { return c.hp > 0; });
 
   if (aliveEnemies.length === 0) return;
-  var target = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+
+  aliveEnemies = getWeightedRandomTargets(aliveEnemies, aliveEnemies.length);
+  aliveAllies.sort(function() { return Math.random() - 0.5; });
+
+  var target = aliveEnemies[0]; // 무작위 단일 타겟용 기본값
 
   logAction("🔥 [액티브] " + source.name + "이(가) '" + skill + "' 전법을 시전합니다!");
 
@@ -155,12 +159,15 @@ function castActiveSkill(skill, source, allies, enemies) {
       }
 
       // 3. 랜덤 적군 2명 타격 및 화공 부여
-      var targetEnemies = [].concat(aliveEnemies).sort(function() { return Math.random() - 0.5; }); // 랜덤 셔플
-      for (var t = 0; t < Math.min(2, targetEnemies.length); t++) {
-        dealDamage(source, targetEnemies[t], 2.2, '책략', '고육지계', allies, enemies);
-        targetEnemies[t].fireState = 2;
-        onDebuffInflicted(source, targetEnemies[t], allies, enemies);
+      for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
+        dealDamage(source, aliveEnemies[t], 2.2, '책략', '고육지계', allies, enemies);
+        aliveEnemies[t].fireState = 2;
+        
+        logAction("🔥 [화공 부여] " + aliveEnemies[t].name + "에게 화공 상태를 2턴 동안 부여합니다. (지력 15 감소)");
+        
+        onDebuffInflicted(source, aliveEnemies[t], allies, enemies);
       }
+
       break;
     case "적진 돌파":
       source.pierce = Math.min(0.2, source.pierce + 0.05);
@@ -185,10 +192,12 @@ function castActiveSkill(skill, source, allies, enemies) {
       break;
     case "만인지적":
       aliveEnemies.forEach(function(enemy) {
-        dealDamage(source, enemy, 1.4, '병기', '만인지적', allies, enemies);
-        if (enemy.threatState > 0 && Math.random() < 0.3) {
-          enemy.fear = 1;
-          logAction("💤 [공포 연계] " + enemy.name + "에게 공포를 부여합니다.");
+        if (enemy.hp > 0) { // [추가] 스킬 시전 도중 연쇄 사망한 적 타격 방지
+          dealDamage(source, enemy, 1.4, '병기', '만인지적', allies, enemies);
+          if (enemy.threatState > 0 && Math.random() < 0.3) {
+            enemy.fear = 1;
+            logAction("💤 [공포 연계] " + enemy.name + "에게 공포를 부여합니다.");
+          }
         }
         enemy.threatState = 2;
         onDebuffInflicted(source, enemy, allies, enemies);
@@ -265,6 +274,7 @@ function castActiveSkill(skill, source, allies, enemies) {
     case "청야 전술":
       aliveEnemies.forEach(function(e) {
         e.tauntedBy = source;
+        e.tauntState = 2;
         logAction("🎯 [도발] " + e.name + "이(가) " + source.name + "을 도발 타겟으로 삼았습니다.");
         onDebuffInflicted(source, e, allies, enemies);
       });
@@ -316,7 +326,7 @@ function castActiveSkill(skill, source, allies, enemies) {
       break;
     case "응전":
       source.pierce = Math.min(0.5, source.pierce + 0.206);
-      var frontRow = aliveEnemies.filter(function(c) { return c.idx === 0; });
+      var frontRow = aliveEnemies.filter(function(c) { return c.position === "전열"; });
       var finalTarget = frontRow.length > 0 ? frontRow[0] : target;
       dealDamage(source, finalTarget, 4.532, '병기', '응전', allies, enemies);
       break;
@@ -338,10 +348,7 @@ function castActiveSkill(skill, source, allies, enemies) {
       // 1. 우군(자신 제외 아군) 필터링
       var targetAllies = aliveAllies.filter(function(a) { return a.name !== source.name; });
       if (targetAllies.length === 0) targetAllies = aliveAllies; // 만약 남은 우군이 없으면 자신 포함
-      
-      // 2. 랜덤 대상 선정을 위해 셔플
-      targetAllies.sort(function() { return Math.random() - 0.5; });
-      
+            
       for (var t = 0; t < Math.min(2, targetAllies.length); t++) {
         var ally = targetAllies[t];
         
@@ -424,9 +431,9 @@ function castActiveSkill(skill, source, allies, enemies) {
         e.fireState = 2;
         onDebuffInflicted(source, e, allies, enemies);
       });
-      for (var i = 0; i < 3; i++) {
-        var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
-        if (rEnemy) {
+      for (var i = 0; i < Math.min(3, aliveEnemies.length); i++) {
+        var rEnemy = aliveEnemies[i];
+        if (rEnemy && rEnemy.hp > 0) {
           var bonus = (rEnemy.stormState > 0) ? 1.3 : 1.0;
           dealDamage(source, rEnemy, 0.8 * bonus, '책략', '소각', allies, enemies);
         }
@@ -451,6 +458,13 @@ function castActiveSkill(skill, source, allies, enemies) {
 
 function decayStatusEffects(characters) {
   characters.forEach(function(c) {
+    if (c.tauntState > 0) {
+      c.tauntState--;
+      if (c.tauntState === 0) {
+        c.tauntedBy = null;
+        logAction("🔻 [상태 해제] " + c.name + "의 도발 상태가 해제되었습니다.");
+      }
+    }
     if (c.silence > 0) c.silence--;
     if (c.disarm > 0) c.disarm--;
     if (c.fear > 0) c.fear--;
