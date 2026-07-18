@@ -129,6 +129,7 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
 
   var baseDmg = 0;
   var critMult = (source.magicState > 0) ? 1.35 : 1.5;
+  if (source.critDamageMod) critMult += source.critDamageMod; // 철기령 보정 (+0.1)
   var isCrit = false;
   var isSpellCrit = false;
 
@@ -270,21 +271,23 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
     }
   }
 
-  if (source.name === "제갈량" && source.skills.indexOf("초선차전") !== -1 && skillName !== "초선차전" && source.제갈량Count < 5 && Math.random() < 0.5) {
+  // --- 초선차전 피격 및 타격 시 반격 발동 ---
+  if (source.skills.indexOf("초선차전") !== -1 && skillName !== "초선차전" && source.제갈량Count < 5 && Math.random() < 0.5) {
     source.제갈량Count++;
     var aliveEnemies = enemies.filter(function(c) { return c.hp > 0; });
     if (aliveEnemies.length > 0) {
-    var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
-      logAction("⚡ [초선차전] 제갈량이 피해를 주어 지휘 효과 발동! (횟수: " + source.제갈량Count + "/5)");
+      var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+      logAction("⚡ [초선차전] 피해를 주어 지휘 효과 발동! (횟수: " + source.제갈량Count + "/5)");
       dealDamage(source, rEnemy, 0.8, '책략', '초선차전', allies, enemies);
     }
   }
-  if (target.name === "제갈량" && target.skills.indexOf("초선차전") !== -1 && skillName !== "초선차전" && target.제갈량Count < 5 && Math.random() < 0.5) {
+
+  if (target.skills.indexOf("초선차전") !== -1 && skillName !== "초선차전" && target.제갈량Count < 5 && Math.random() < 0.5) {
     target.제갈량Count++;
-    var aliveEnemies = allies.filter(function(c) { return c.hp > 0; });
+    var aliveEnemies = allies.filter(function(c) { return c.hp > 0; }); // 타겟의 적군은 곧 소스의 아군
     if (aliveEnemies.length > 0) {
       var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
-      logAction("⚡ [초선차전] 제갈량이 피해를 받아 지휘 반격 발동! (횟수: " + target.제갈량Count + "/5)");
+      logAction("⚡ [초선차전] 피해를 받아 지휘 반격 발동! (횟수: " + target.제갈량Count + "/5)");
       dealDamage(target, rEnemy, 0.8, '책략', '초선차전', enemies, allies); 
     }
   }
@@ -309,21 +312,45 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
   return finalDmg;
 }
 
-function heal(source, target, coef, skillName) {
-  if (source.hp <= 0 || target.hp <= 0) return 0;
+function heal(source, target, coef, skillName, teamArray) {
+  if (!source || !target || source.hp <= 0 || target.hp <= 0) return 0;
+  
   var healAmt = Math.round(source.intel * coef);
   if (skillName === "강동 제패") healAmt = Math.round(source.force * coef);
 
-  // [패치] 군량 고갈(grainExhaustState) 상태일 경우 치유량 70% 감소
+  if (source.strategies && source.strategies.indexOf("인의론") !== -1) {
+    healAmt = Math.round(healAmt * 1.12); 
+  }
+
   if (target.grainExhaustState > 0) {
     healAmt = Math.round(healAmt * 0.3);
-    logAction("🌾 [군량 고갈] " + target.name + "이(가) 군량 고갈 상태로 치유량이 70% 감소했습니다!");
+    logAction("🌾 [군량 고갈] " + target.name + "이(가) 군량 고갈로 치유량이 감소했습니다!");
   }
 
   healAmt = Math.min(healAmt, target.maxHp - target.hp);
   target.hp += healAmt;
   source.totalHealingDone += healAmt;
-  logAction("💚 [" + skillName + "] " + source.name + "이(가) " + target.name + "의 병력을 " + healAmt + " 회복시켰습니다. (현재 병력: " + target.hp + ")");
+  logAction("💚 [" + skillName + "] " + source.name + "이(가) " + target.name + "의 병력을 " + healAmt + " 회복시켰습니다.");
+  
+  if (source.strategies && source.strategies.indexOf("인의론") !== -1) {
+    if (source !== target) { 
+      source.인의론Count = (source.인의론Count || 0) + 1;
+      if (source.인의론Count >= 4 && !source.인의론TurnTriggered) {
+        source.인의론TurnTriggered = true; 
+        source.인의론Count = 0; 
+        
+        // typeof 방어 로직: 인자 없이 heal이 호출되어도 에러 발생 차단
+        if (typeof teamArray !== "undefined" && teamArray) { 
+          var aliveAllies = teamArray.filter(function(a) { return a.hp > 0 && a !== source; });
+          if (aliveAllies.length > 0) {
+            var rAlly = aliveAllies[Math.floor(Math.random() * aliveAllies.length)];
+            rAlly.regenState = 1;
+            logAction("📖 [고유병법] '인의론' 발동! 4회 치유 누적 달성. " + rAlly.name + "에게 정신 회복(1턴)을 부여합니다.");
+          }
+        }
+      }
+    }
+  }
   return healAmt;
 }
 

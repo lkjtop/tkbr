@@ -74,9 +74,15 @@ function simulateBattle() {
 
       logAction("👉 [" + actor.name + " (" + actor.deck + "덱)] 행동 시작 (현재 병력: " + actor.hp + ")");
 
-      // [공포 면역 패치]
+      // 1. [공포 면역 및 준비 중단 패치]
       if (actor.fear > 0 && actor.regenState <= 0) {
         logAction("💤 [공포] " + actor.name + "은(는) 공포 상태로 행동 불능입니다.");
+
+        // --- 🔥 [추가] 공포로 인한 준비 중단 ---
+        if (actor.preparedSkill) {
+          logAction("💥 [시전 중단] 공포 상태로 인해 준비 중이던 '" + actor.preparedSkill + "' 시전이 완전히 취소되었습니다!");
+          actor.preparedSkill = null;
+        }
         continue;
       } else if (actor.fear > 0 && actor.regenState > 0) {
         logAction("✨ [정신 회복] " + actor.name + "이(가) 정신 회복으로 공포 상태를 일시 무효화합니다.");
@@ -93,6 +99,7 @@ function simulateBattle() {
       
       if (actor.silence <= 0 || actor.regenState > 0) {
         if (actor.silence > 0) logAction("✨ [정신 회복] " + actor.name + "이(가) 정신 회복으로 침묵을 무효화하고 액티브를 시전합니다.");
+
         for (var s = 0; s < 3; s++) {
           var sName = actor.skills[s];
           if (!sName) continue;
@@ -107,13 +114,20 @@ function simulateBattle() {
               castActiveSkill(sName, actor, curAllies, curEnemies);
               actor.preparedSkill = null;
             } else {
-              actor.preparedSkill = sName;
-              logAction("⏳ [준비] " + actor.name + "이(가) '" + sName + "' 시전을 위한 준비 상태에 들어갑니다.");
+              // 다른 스킬을 준비 중이라면 새 스킬 준비 불가
+              if (!actor.preparedSkill) {
+                actor.preparedSkill = sName;
+                logAction("⏳ [준비] " + actor.name + "이(가) '" + sName + "' 시전을 위한 준비 상태에 들어갑니다.");
+              }
             }
             continue;
           }
 
           var prob = getSkillProb(sName, actor.name) + actor.activeRateBonus;
+          // --- 장비 고유 병법 '신정후도명' 확률 100% 보정 ---
+          if (sName === "만인지적" && actor.strategies && actor.strategies.indexOf("신정후도명") !== -1) {
+            prob = 1.0; 
+          }
           if (Math.random() < prob) {
             castActiveSkill(sName, actor, curAllies, curEnemies);
             if (actor.name === "곽가" && Math.random() < 0.7) {
@@ -126,6 +140,12 @@ function simulateBattle() {
         }
       } else {
         logAction("🤐 [침묵] " + actor.name + "은(는) 침묵 상태로 액티브 전법을 사용할 수 없습니다.");
+
+        // --- 🔥 [추가] 침묵으로 인한 준비 중단 ---
+        if (actor.preparedSkill) {
+          logAction("💥 [시전 중단] 침묵 상태로 인해 준비 중이던 '" + actor.preparedSkill + "' 시전이 완전히 취소되었습니다!");
+          actor.preparedSkill = null;
+        }
       }
 
       // [무장 해제 면역 패치]
@@ -319,8 +339,11 @@ function settleStrategyBonus(team) {
       if (!strat) return;
       // [병법.csv 전담] 향후 DB에 등록된 고유/공용 병법만 이곳에 추가됩니다.
       if (strat.indexOf("출사표") !== -1) { c.intel += 15; logAction("📖 [고유병법] " + c.name + ": '출사표' 효과 (지력 +15)"); }
-      else if (strat.indexOf("철기령") !== -1) { c.critProb += 0.06; logAction("📖 [고유병법] " + c.name + ": '철기령' 효과 (회심 +6%)"); }
-      else if (strat.indexOf("인의론") !== -1) { c.damageTakenMod *= 0.95; logAction("📖 [고유병법] " + c.name + ": '인의론' 효과 (받는피해 5% 감소)"); }
+      else if (strat.indexOf("철기령") !== -1) {
+        c.critProb += 0.06; 
+        c.critDamageMod = 0.10; // 회심 피해 10% 증가
+        logAction("📖 [고유병법] " + c.name + ": '철기령' 적용 (회심 +6%, 회심 피해 +10%)");
+      }
     });
   });
 }
@@ -414,17 +437,53 @@ function triggerBattleStart(team, opponent) {
 
 function triggerTurnStart(team, opponent, turn) {
   team.forEach(function(c) {
+    c.인의론TurnTriggered = false; // 매 턴 유비 고유 병법 횟수 제한 초기화
+    
+    // 제갈량 고유 병법 '출사표' ---
+    if (c.strategies && c.strategies.indexOf("출사표") !== -1) {
+      if (turn % 2 === 1) { // 홀수 턴 (적군 2명 약화)
+        var aliveOpp = getWeightedRandomTargets(opponent.filter(function(e) { return e.hp > 0; }), 2);
+        for(var t=0; t<aliveOpp.length; t++) {
+          aliveOpp[t].damageTakenMod += 0.12;
+          aliveOpp[t].출사표Debuff = 1; // 1턴 유지
+          logAction("📖 [고유병법] '출사표' 발동! " + aliveOpp[t].name + "의 받는 피해가 1턴간 12% 증가합니다.");
+        }
+      } else { // 짝수 턴 (아군 2명 강화)
+        var aliveTeam = team.filter(function(a) { return a.hp > 0; }).sort(function() { return Math.random() - 0.5; });
+        for(var t=0; t<Math.min(2, aliveTeam.length); t++) {
+          aliveTeam[t].damageTakenMod -= 0.12;
+          aliveTeam[t].출사표Buff = 1; // 1턴 유지
+          logAction("📖 [고유병법] '출사표' 발동! " + aliveTeam[t].name + "의 받는 피해가 1턴간 12% 감소합니다.");
+        }
+      }
+    }
     if (c.name === "대교") {
-      // 1. 아군 2명 회복
+      // 1. 고유 병법 '상사문부' 장착 여부 확인
+      var hasSangSa = (c.strategies && c.strategies.indexOf("상사문부") !== -1);
+      
+      // 2. 아군 2명 회복 (상사문부 적용 시 치유율 1.8 -> 0.9로 50% 감소)
+      var healCoef = hasSangSa ? 0.9 : 1.8; 
       var aliveTeam = team.filter(function(ally) { return ally.hp > 0; });
       aliveTeam.sort(function() { return Math.random() - 0.5; });
+      
+      if (hasSangSa) logAction("📖 [고유병법] '상사문부' 적용! 대교의 국색 치유량이 50% 감소합니다.");
+      
       for (var t = 0; t < Math.min(2, aliveTeam.length); t++) {
-        heal(c, aliveTeam[t], 1.8, "국색");
+        heal(c, aliveTeam[t], healCoef, "국색");
       }
-      var aliveOpp = getWeightedRandomTargets(opponent.filter(function(e) { return e.hp > 0; }), 2);
+
+      // 3. 적군 디버프 부여 (상사문부 적용 시 적군 전체, 미적용 시 2명)
+      var aliveOpponents = opponent.filter(function(e) { return e.hp > 0; });
+      var targetCount = hasSangSa ? aliveOpponents.length : 2;
+      
+      if (hasSangSa) logAction("📖 [고유병법] '상사문부' 적용! 국색 디버프가 적군 전체로 확대됩니다.");
+      
+      var aliveOpp = getWeightedRandomTargets(aliveOpponents, targetCount);
       for (var t = 0; t < aliveOpp.length; t++) {
-        aliveOpp[t].국색State = 2;
-        logAction("🌸 [국색] " + aliveOpp[t].name + "에게 디버프 부여 (2턴간 받는 피해 20% 증가)");
+        aliveOpp[t].국색State = 1; // 기획서 기준: 1턴 지속
+        logAction("🌸 [국색] " + aliveOpp[t].name + "에게 디버프 부여 (1턴간 받는 피해 20% 증가)");
+        
+        // 4. 여기서 onDebuffInflicted가 호출되며, 수정된 세금 과징수 로직이 대상마다 1번씩 발동
         onDebuffInflicted(c, aliveOpp[t], team, opponent);
       }
     }
@@ -501,7 +560,9 @@ function triggerTurnEnd(team, opponent, turn) {
       }
     }
     if (c.name === "유비") {
-      team.forEach(function(ally) { heal(c, ally, 1.0, "백성과 함께"); });
+      team.forEach(function(ally) {
+        heal(c, ally, 1.0, "백성과 함께", team);
+      });
       var lowestHpAlly = team.filter(function(ally) { return ally.hp > 0; }).sort(function(x, y) { return x.hp - y.hp; })[0];
       if (lowestHpAlly) {
         // 현재 걸려있는 제어 디버프 스캔
@@ -518,7 +579,7 @@ function triggerTurnEnd(team, opponent, turn) {
           lowestHpAlly[toRemove] = 0;
           logAction("✨ [백성과 함께] 유비가 " + lowestHpAlly.name + "의 제어 효과 1개를 정화합니다!");
         }
-        heal(c, lowestHpAlly, 0.9, "백성과 함께");
+        heal(c, lowestHpAlly, 0.9, "백성과 함께", team);
       }
     }
     if (c.skills.indexOf("평화의 기운") !== -1) { 

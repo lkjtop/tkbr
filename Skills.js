@@ -6,25 +6,26 @@
 function onDebuffInflicted(source, target, sourceTeam, targetTeam) {
   if (!source || !target || source.hp <= 0 || target.hp <= 0) return;
   
+  // 1. 세금 과징수 (자신이 디버프를 부여했을 때 개별 발동)
   if (source.skills.indexOf("세금 과징수") !== -1) {
     if (source.세금과징수Count < 10) {
       source.세금과징수Count++;
       
-      // 1. 치유량 계산 정상화 (지력 40%)
-      var healAmt = Math.round(source.intel * 0.4); 
+      // 기획 데이터 반영: 지력 + 통솔 합산의 40% 치유
+      var healAmt = Math.round((source.intel + source.command) * 0.4); 
       healAmt = Math.min(healAmt, source.maxHp - source.hp);
       source.hp += healAmt;
       source.totalHealingDone += healAmt;
-      logAction("💰 [세금 과징수] 디버프 부여 후 자가 치유 발동! " + source.name + "의 병력을 " + healAmt + " 회복시켰습니다. (턴 내 발동: " + source.세금과징수Count + "/10)");
       
-      // 2. 2턴 지속, 최대 4스택 버프 로직
+      logAction("💰 [세금 과징수] " + target.name + "에게 디버프 적중! 자가 치유 발동! (턴 내 발동: " + source.세금과징수Count + "/10)");
+      
+      // 2턴 지속, 최대 4스택 버프 로직
       if (!source.세금과징수Buff) source.세금과징수Buff = [];
       if (source.세금과징수Buff.length < 4) {
-        source.세금과징수Buff.push(2); // 2턴 지속시간 추가
-        source.damageTakenMod -= 0.1; // 피해 감소 10%
+        source.세금과징수Buff.push(2); 
+        source.damageTakenMod -= 0.1; 
         logAction("  └ " + source.name + "의 받는 피해가 2턴간 10% 감소합니다. (현재 중첩: " + source.세금과징수Buff.length + "/4)");
       } else {
-        // 이미 4스택이면 지속시간이 짧은 스택을 갱신
         var refreshed = false;
         for(var i=0; i<source.세금과징수Buff.length; i++) {
           if(source.세금과징수Buff[i] < 2) {
@@ -33,29 +34,20 @@ function onDebuffInflicted(source, target, sourceTeam, targetTeam) {
             break;
           }
         }
-        if (refreshed) logAction("  └ " + source.name + "의 '세금 과징수' 방어 버프 지속시간이 갱신되었습니다.");
       }
     }
   }
   
-  var team = sourceTeam;
-  var oppTeam = targetTeam;
-  
-  if (team) {
-    team.forEach(function(member) {
-      if (member.hp > 0 && member.skills.indexOf("독설가") !== -1) {
-        if (member.독설가Count < 2 && Math.random() < 0.6) {
-          member.독설가Count++;
-          var aliveEnemies = oppTeam.filter(function(e) { return e.hp > 0; });
-          if (aliveEnemies.length > 0) {
-            var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
-            logAction("🗣️ [독설가] 적군 디버프 감지! 추가 책략 피해 발동! (턴 내 발동: " + member.독설가Count + "/2)");
-            dealDamage(member, rEnemy, 1.1, '책략', '독설가', team, oppTeam);
-          }
-        }
+  // 2. 독설가 (적군이 디버프를 받을 때 아군 제갈량이 감지하고 발동)
+  sourceTeam.forEach(function(member) {
+    if (member.hp > 0 && member.skills.indexOf("독설가") !== -1) {
+      if (member.독설가Count < 2 && Math.random() < 0.6) {
+        member.독설가Count++;
+        logAction("🗣️ [독설가] " + target.name + "의 디버프 감지! " + member.name + "의 추가 책략 피해 발동! (턴 내 발동: " + member.독설가Count + "/2)");
+        dealDamage(member, target, 1.1, '책략', '독설가', sourceTeam, targetTeam);
       }
-    });
-  }
+    }
+  });
 }
 
 function castActiveSkill(skill, source, allies, enemies) {
@@ -156,6 +148,13 @@ function castActiveSkill(skill, source, allies, enemies) {
       if (highIntel) {
         logAction("🩸 [고육지계 연계] 지력이 가장 높은 우군 " + highIntel.name + "이(가) 황개에게 피해를 입힙니다!");
         dealDamage(highIntel, source, 0.6, '병기', '고육지계 (우군 타격)', allies, enemies);
+
+        // --- [패치] 황개 고유 병법 '견결' ---
+        if (source.strategies && source.strategies.indexOf("견결") !== -1) {
+          source.견결Buff = 2; // 2턴 지속
+          source.damageTakenMod -= 0.12;
+          logAction("📖 [고유병법] '견결' 발동! 우군의 피해를 받아 2턴간 황개의 받는 피해가 12% 감소합니다.");
+        }
       }
 
       // 3. 랜덤 적군 2명 타격 및 화공 부여
@@ -191,10 +190,16 @@ function castActiveSkill(skill, source, allies, enemies) {
       onDebuffInflicted(source, target, allies, enemies);
       break;
     case "만인지적":
+      var hasSinjeong = (source.strategies && source.strategies.indexOf("신정후도명") !== -1);
+      var fearProb = hasSinjeong ? 0.12 : 0.3;     // 공포 확률 12%로 너프
+      var dmgCoef = hasSinjeong ? 1.05 : 1.4;      // 피해 계수 140% -> 105% (35% 감소)
+
+      if (hasSinjeong) logAction("📖 [고유병법] '신정후도명' 적용! (만인지적 피해 105%, 공포 12%로 변경)");
+      
       aliveEnemies.forEach(function(enemy) {
-        if (enemy.hp > 0) { // [추가] 스킬 시전 도중 연쇄 사망한 적 타격 방지
-          dealDamage(source, enemy, 1.4, '병기', '만인지적', allies, enemies);
-          if (enemy.threatState > 0 && Math.random() < 0.3) {
+        if (enemy.hp > 0) { 
+          dealDamage(source, enemy, dmgCoef, '병기', '만인지적', allies, enemies);
+          if (enemy.threatState > 0 && Math.random() < fearProb) {
             enemy.fear = 1;
             logAction("💤 [공포 연계] " + enemy.name + "에게 공포를 부여합니다.");
           }
@@ -529,6 +534,21 @@ function decayStatusEffects(characters) {
         c.고육지계ReduceAmt = 0;
         logAction("🔻 [버프 종료] " + c.name + "의 '고육지계'가 만료되어 받는 피해 감소 효과가 원상 복구되었습니다.");
       }
+    }
+    if (c.견결Buff > 0) {
+      c.견결Buff--;
+      if (c.견결Buff === 0) {
+        c.damageTakenMod += 0.12;
+        logAction("🔻 [버프 종료] " + c.name + "의 '견결'이 만료되어 받는 피해가 원상 복구되었습니다.");
+      }
+    }
+    if (c.출사표Buff > 0) {
+      c.출사표Buff--;
+      if (c.출사표Buff === 0) c.damageTakenMod += 0.12;
+    }
+    if (c.출사표Debuff > 0) {
+      c.출사표Debuff--;
+      if (c.출사표Debuff === 0) c.damageTakenMod -= 0.12;
     }
   });
 }
