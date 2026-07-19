@@ -3,6 +3,8 @@
  * 포진 결산(진영/병종/인연/진형/병법), 턴 시작/종료 지휘 효과, 전투 시뮬레이션 메인 루프 전담
  */
 
+var turn = 0;
+
 function simulateBattle() {
   var allies = [
     initChar(aNames[0], aCamps[0], aTroops[0], aPositions[0], aForce[0], aIntel[0], aCommand[0], aFirst[0], aSkills[0], aStrategies[0], 'A', 0),
@@ -44,7 +46,6 @@ function simulateBattle() {
   logAction("⚔️ [전투 단계] 실시간 턴제 결산 돌입 (최대 8턴 제한)");
   logAction("=====================================================================");
   
-  var turn = 0;
   for (turn = 1; turn <= 8; turn++) {
     var alliesAlive = allies.some(function(c) { return c.hp > 0; });
     var enemiesAlive = enemies.some(function(c) { return c.hp > 0; });
@@ -155,11 +156,22 @@ function simulateBattle() {
         var target = getAttackTarget(actor, curEnemies);
         if (target) {
           performNormalAttack(actor, target, curAllies, curEnemies);
-          var doubleAttackProb = actor.doubleAttackProb;
-          if (actor.skills.indexOf("늠름한 자태") !== -1) doubleAttackProb += 0.636;
+
+          // 🔥 [버그 픽스] triggerBattleStart에서 이미 확률이 부여되므로 중복 코드 삭제
+          var doubleAttackProb = actor.doubleAttackProb; 
+          
           if (Math.random() < doubleAttackProb) {
             logAction("⚡ [연타] " + actor.name + "의 연타 공격 발동!");
-            performNormalAttack(actor, target, curAllies, curEnemies);
+            
+            // 🔥 [타겟팅 패치] 첫 공격으로 적이 사망했다면 새로운 타겟 탐색
+            if (target.hp <= 0) {
+              target = getAttackTarget(actor, curEnemies);
+            }
+            
+            // 새 타겟이 존재할 경우에만 연타 실행
+            if (target) {
+              performNormalAttack(actor, target, curAllies, curEnemies);
+            }
           }
         }
       } else {
@@ -306,6 +318,17 @@ function settleBondBonus(team, bonds, teamId) {
           else if (bond.name === "황건봉기") { c.tacticMods.activeProb = (c.tacticMods.activeProb || 0) + 0.08; }
           else if (bond.name === "하북 정장") { c.force += 20; }
           else if (bond.name === "궁술 대결") { c.pierce += 0.05; }
+          else if (bond.name === "부창부수") { c.tacticMods.activeProb = (c.tacticMods.activeProb || 0) + 0.04; }
+          else if (bond.name === "나라의 동량") { c.tacticMods.spellDmg = (c.tacticMods.spellDmg || 0) + 0.08; }
+          else if (bond.name === "조정의 기둥") { c.tacticMods.dmgDealtDebuffed = (c.tacticMods.dmgDealtDebuffed || 0) + 0.08; }
+          else if (bond.name === "고육지계") { c.고육지계BondActive = true; } // Combat.gs 연계용 플래그
+          else if (bond.name === "조위의 종장") { 
+            var maxStat = Math.max(c.force, c.intel, c.command, c.speed);
+            if (maxStat === c.force) c.force += 15;
+            else if (maxStat === c.intel) c.intel += 15;
+            else if (maxStat === c.command) c.command += 15;
+            else c.speed += 15;
+          }
         });
       }
     }
@@ -496,7 +519,8 @@ function triggerBattleStart(team, opponent) {
     }
     if (c.name === "곽가") {
       c.activeRateBonus = Math.min(0.3, c.activeRateBonus + 0.06);
-      var highIntel = team.sort(function(x, y) { return y.intel - x.intel; })[0];
+      // 🔥 [배열 복사 패치] slice()를 추가하여 원본 진형 순서 보존
+      var highIntel = team.slice().sort(function(x, y) { return y.intel - x.intel; })[0];
       if (highIntel) {
         highIntel.activeRateBonus = Math.min(0.3, highIntel.activeRateBonus + 0.06);
         logAction("🧠 [지휘] 곽가의 고유 버프! 곽가와 " + highIntel.name + "의 액티브 전법 발동률이 6% 증가합니다.");
@@ -528,7 +552,8 @@ function triggerBattleStart(team, opponent) {
     if (c.skills.indexOf("정의의 희생") !== -1) { 
       team.forEach(function(ally) { ally.doubleAttackProb = Math.min(0.8, ally.doubleAttackProb + 0.3); });
       c.fear = 2;
-      var highestForceAlly = team.sort(function(x, y) { return y.force - x.force; })[0];
+      // 🔥 [배열 복사 패치] slice()를 추가하여 원본 진형 순서 보존
+      var highestForceAlly = team.slice().sort(function(x, y) { return y.force - x.force; })[0];
       if (highestForceAlly) {
         highestForceAlly.regenState = 2;
       }
@@ -538,10 +563,6 @@ function triggerBattleStart(team, opponent) {
       c.pierce = Math.min(0.5, c.pierce + 0.16);
       c.damageDealtMod = Math.min(2.0, c.damageDealtMod + 0.35);
       logAction("⚔️ [패시브] 예리한 통찰 적용! 주는 피해 및 관통력 증가.");
-    }
-    if (c.skills.indexOf("기병 돌격") !== -1) {
-      c.critProb += 0.15;
-      logAction("🏇 [패시브] 마초의 '기병 돌격' 적용! 회심 확률이 15% 증가합니다.");
     }
     if (c.skills.indexOf("용맹한 삼군") !== -1) {
       c.lifestealProb = Math.min(0.5, c.lifestealProb + 0.30);
@@ -685,6 +706,12 @@ function triggerTurnStart(team, opponent, turn) {
 function triggerTurnEnd(team, opponent, turn) {
   team.forEach(function(c) {
     if (c.hp <= 0) return;
+    if (c.탈주병State > 0) {
+      var deserterDmg = Math.round(c.force * 0.8); // DB 기획(무력 비례 특수 피해) 기준 80% 가설정
+      c.hp -= deserterDmg;
+      c.woundedHp = (c.woundedHp || 0) + Math.round(deserterDmg * 0.85);
+      logAction("🩸 [탈주병] " + c.name + "의 부대에 탈주병이 발생하여 " + deserterDmg + "의 특수 피해(방어무시)를 입었습니다.");
+    }
     if (c.name === "화타") {
       var lowestHpAlly = team.filter(function(ally) { return ally.hp > 0; }).sort(function(x, y) { return x.hp - y.hp; })[0];
       if (lowestHpAlly) {

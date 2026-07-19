@@ -13,11 +13,16 @@ function onDebuffInflicted(source, target, sourceTeam, targetTeam) {
       
       // 기획 데이터 반영: 지력 + 통솔 합산의 40% 치유
       var healAmt = Math.round((source.intel + source.command) * 0.4); 
-      healAmt = Math.min(healAmt, source.maxHp - source.hp);
-      source.hp += healAmt;
-      source.totalHealingDone += healAmt;
       
-      logAction("💰 [세금 과징수] " + target.name + "에게 디버프 적중! 자가 치유 발동! (턴 내 발동: " + source.세금과징수Count + "/10)");
+      // 🔥 [부상병 패치] 부상병 한도 내에서만 회복하도록 제한 및 차감 로직 추가
+      var availableWounded = Math.max(0, Math.round(source.woundedHp || 0));
+      var finalHealAmt = Math.min(healAmt, availableWounded);
+      
+      source.hp += finalHealAmt;
+      source.woundedHp = Math.max(0, source.woundedHp - finalHealAmt); // 부상병 정상 차감
+      source.totalHealingDone += finalHealAmt;
+      
+      logAction("💰 [세금 과징수] " + target.name + "에게 디버프 적중! 자가 치유 발동! (턴 내 발동: " + source.세금과징수Count + "/10) (잔여 부상병: " + source.woundedHp + ")");
       
       // 2턴 지속, 최대 4스택 버프 로직
       if (!source.세금과징수Buff) source.세금과징수Buff = [];
@@ -216,7 +221,8 @@ function castActiveSkill(skill, source, allies, enemies) {
       aliveEnemies.forEach(function(enemy) {
         dealDamage(source, enemy, 1.8, '병기', '화하 진압', allies, enemies);
         if (enemy.silence > 0 || enemy.disarm > 0 || enemy.fear > 0 || enemy.weakness > 0 || enemy.confusion > 0) {
-          enemy.grainExhaustState = 2; // (탈주병 대체)
+          enemy.탈주병State = 2;
+          logAction("🩸 [화하 진압] " + enemy.name + "에게 탈주병 상태(특수피해 대기)를 2턴 동안 부여합니다.");
           onDebuffInflicted(source, enemy, allies, enemies);
         }
       }); 
@@ -462,6 +468,64 @@ function castActiveSkill(skill, source, allies, enemies) {
         rAlly.regenState = 2;
       }
       break;
+    case "팔방전":
+      aliveEnemies.forEach(function(enemy) {
+        dealDamage(source, enemy, 1.3, '병기', '팔방전', allies, enemies);
+        enemy.threatState = 2;
+        onDebuffInflicted(source, enemy, allies, enemies);
+      });
+      break;
+    case "재해 이용":
+      var allTargets = aliveAllies.concat(aliveEnemies).filter(function(c) { return c !== source; });
+      allTargets.forEach(function(target) {
+        dealDamage(source, target, 1.4, '책략', '재해 이용', allies, enemies);
+      });
+      aliveEnemies.forEach(function(enemy) {
+        if (enemy.fireState > 0 && Math.random() < 0.4) {
+          enemy.confusion = 1;
+          logAction("🌀 [재해 이용] " + enemy.name + "에게 혼란 상태 부여.");
+          onDebuffInflicted(source, enemy, allies, enemies);
+        }
+        if (enemy.floodState > 0 && Math.random() < 0.4) {
+          enemy.disarm = 1;
+          logAction("🛡️ [재해 이용] " + enemy.name + "에게 무장 해제 상태 부여.");
+          onDebuffInflicted(source, enemy, allies, enemies);
+        }
+        if (enemy.stormState > 0 && Math.random() < 0.4) {
+          enemy.silence = 1;
+          logAction("🤐 [재해 이용] " + enemy.name + "에게 침묵 상태 부여.");
+          onDebuffInflicted(source, enemy, allies, enemies);
+        }
+      });
+      break;
+    case "칠군수몰":
+      // aliveEnemies 배열(생존한 적군 전체)을 순회하며 타격 및 디버프 부여
+      aliveEnemies.forEach(function(enemy) {
+        
+        // 1. 260% 병기 피해 (통솔을 깎는 홍수가 들어가기 전에 먼저 피해를 입힘)
+        dealDamage(source, enemy, 2.6, '병기', '칠군수몰', allies, enemies);
+        
+        // 2. 2턴 홍수 상태 확정 부여
+        enemy.floodState = 2;
+        logAction("🌊 [홍수 부여] " + enemy.name + "에게 홍수 상태를 2턴 동안 부여합니다.");
+        // 디버프 부여 성공 시 세금 과징수/독설가 등 패시브 연계 감지
+        onDebuffInflicted(source, enemy, allies, enemies);
+
+        // 3. 65% 확률 1턴 침묵 (개별 판정)
+        if (Math.random() < 0.65) {
+          enemy.silence = 1;
+          logAction("🤐 [칠군수몰] " + enemy.name + "에게 침묵을 1턴 동안 부여합니다.");
+          onDebuffInflicted(source, enemy, allies, enemies);
+        }
+
+        // 4. 65% 확률 1턴 무장 해제 (개별 판정)
+        if (Math.random() < 0.65) {
+          enemy.disarm = 1;
+          logAction("🛡️ [칠군수몰] " + enemy.name + "에게 무장 해제를 1턴 동안 부여합니다.");
+          onDebuffInflicted(source, enemy, allies, enemies);
+        }
+      });
+      break;  
   }
 }
 
@@ -583,6 +647,18 @@ function decayStatusEffects(characters) {
                 logAction("🔻 [버프 종료] " + c.name + "의 '충신의 기재' 1스택이 만료되어 지력이 감소했습니다.");
             }
         }
+    }
+    if (c.탈주병State > 0) c.탈주병State--;
+    if (c.순간돌습Debuff > 0) {
+      c.순간돌습Debuff--;
+      if (c.순간돌습Debuff === 0) c.command += 30.9;
+    }
+    if (c.철기병돌격Buff > 0) {
+      c.철기병돌격Buff--;
+      if (c.철기병돌격Buff === 0) {
+        c.critProb -= 0.206;
+        logAction("🔻 [버프 종료] " + c.name + "의 '철기병 돌격'이 만료되어 회심 확률이 원상 복구되었습니다.");
+      }
     }
   });
 }

@@ -40,5 +40,10 @@ function initChar(name, camp, troop, pos, force, intel, command, speed, skills, 
     파죽지세Buff: 0, 
     원문사극Buff: [], 
     충신의기재Buff: [],
+    탈주병State: 0,
+    순간돌습Debuff: 0,
+    철기병돌격Buff: 0,
+    고육지계BondActive: false, 
+    고육지계BondTriggered: false
   };
 }

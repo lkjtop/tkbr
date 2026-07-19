@@ -20,9 +20,9 @@ function runSimulation() {
   }
 
   // ===================================
-  // 1. 다중 시뮬레이션 (1,000회)
+  // 1. 다중 시뮬레이션 (1,0000회)
   // ===================================
-  var simCount = 1000, aWins = 0, bWins = 0, totalTurns = 0;
+  var simCount = 10000, aWins = 0, bWins = 0, totalTurns = 0;
   var aHp = [0,0,0], aDmg = [0,0,0], aRec = [0,0,0], aHeal = [0,0,0];
   var bHp = [0,0,0], bDmg = [0,0,0], bRec = [0,0,0], bHeal = [0,0,0];
 

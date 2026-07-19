@@ -177,6 +177,18 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
   // =================================================
   // 🔴 [병법 패치] 공용 병법 피해/피격 증감 합연산 적용
   // =================================================
+
+  // 고육지계 인연 트리거 감지 및 버프 활성화
+  if (target.고육지계BondActive && !target.고육지계BondTriggered) {
+      var isAlly = allies.some(function(a) { return a.name === source.name; });
+      if (isAlly && source.name !== target.name) { 
+          target.고육지계BondTriggered = true;
+          if (!target.tacticMods) target.tacticMods = {};
+          target.tacticMods.activeDmgTaken = (target.tacticMods.activeDmgTaken || 0) + 0.12; 
+          logAction("🔗 [인연-고육지계] 우군의 타격을 감지하여 " + target.name + "의 받는 액티브 피해가 12% 감소합니다!");
+      }
+  }
+
   var totalDmgMod = 1.0;
   totalDmgMod += (source.damageDealtMod - 1.0); 
   totalDmgMod += (target.damageTakenMod - 1.0); 
@@ -218,6 +230,11 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
           totalDmgMod -= target.tacticMods.spellDmgTaken;
           if (isEven) totalDmgMod -= target.tacticMods.spellDmgTakenEven;
       }
+      
+      // 고육지계(및 기타 괄목상대 등)로 획득한 액티브 피해 감소 적용
+      if (isActiveSkill(skillName) && target.tacticMods.activeDmgTaken) {
+        totalDmgMod -= target.tacticMods.activeDmgTaken;
+      }
   }
 
   // 3. 기존 상태 이상 증감 로직 병합
@@ -246,7 +263,7 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
   target.hp -= finalDmg;
   
   // 🩸 [부상병 패치] 대미지의 15%는 전사(회복 불가), 85%만 부상병으로 누적
-  target.woundedHp = (target.woundedHp || 0) + (finalDmg * 0.85);
+  target.woundedHp = (target.woundedHp || 0) + Math.round(finalDmg * 0.85);
 
   source.totalDamageDealt += finalDmg;
   target.totalDamageTaken += finalDmg;
@@ -283,26 +300,44 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
     logAction("⚡ [기병 돌격] 메인 타격 회심 적중! (턴 내 발동: " + source.척살Count + "/5)");
     var prevPierce = source.pierce;
     source.pierce = 1.0; 
-    dealDamage(source, target, 0.6, '병기', '척살', allies, enemies);
-    source.pierce = prevPierce; 
+
+    // 🔥 [타겟팅 패치] 메인 공격으로 적이 사망했다면 새로운 타겟 탐색
+    var chukTarget = target;
+    if (chukTarget.hp <= 0) {
+      chukTarget = getAttackTarget(source, enemies); // enemies 덱 기반 새 타겟팅
+    }
+    
+    // 새 타겟이 존재할 경우에만 척살 피해 적용
+    if (chukTarget) {
+      dealDamage(source, chukTarget, 0.6, '병기', '척살', allies, enemies);
+    }
+    source.pierce = prevPierce;
   }
 
-  // 🔴 7. 흡혈 로직 독립 및 부상병 제한
+// 🔴 7. 흡혈 로직 독립 및 부상병 제한
   if (type === '병기' && source.lifestealProb > 0) {
     var lsAmt = Math.round(finalDmg * source.lifestealProb);
-    var actualLs = Math.min(lsAmt, Math.round(source.woundedHp || 0)); // 부상병만큼만 회복 가능
+    
+    // ✅ (수정 후) Math.max(0, ...) 추가
+    var availableWounded = Math.max(0, Math.round(source.woundedHp || 0));
+    var actualLs = Math.min(lsAmt, availableWounded); 
+    
     source.hp += actualLs;
-    source.woundedHp -= actualLs; // 회복한 만큼 부상병 차감
+    source.woundedHp = Math.max(0, source.woundedHp - actualLs);
     source.totalHealingDone += actualLs;
-    logAction("💚 [회유] " + source.name + "이(가) 병력을 " + actualLs + " 회복했습니다. (잔여 부상병: " + Math.round(source.woundedHp || 0) + ")");
+    if (actualLs > 0) logAction("💚 [회유] " + source.name + "이(가) 병력을 " + actualLs + " 회복했습니다. (잔여 부상병: " + source.woundedHp + ")");
   }
   if (type === '책략' && source.psyLifestealProb > 0) {
     var lsAmt = Math.round(finalDmg * source.psyLifestealProb);
-    var actualLs = Math.min(lsAmt, Math.round(source.woundedHp || 0));
+    
+    // ✅ (수정 후) Math.max(0, ...) 추가
+    var availableWounded = Math.max(0, Math.round(source.woundedHp || 0));
+    var actualLs = Math.min(lsAmt, availableWounded);
+    
     source.hp += actualLs;
-    source.woundedHp -= actualLs;
+    source.woundedHp = Math.max(0, source.woundedHp - actualLs);
     source.totalHealingDone += actualLs;
-    logAction("💚 [심리 공격] " + source.name + "이(가) 병력을 " + actualLs + " 회복했습니다. (잔여 부상병: " + Math.round(source.woundedHp || 0) + ")");
+    if (actualLs > 0) logAction("💚 [심리 공격] " + source.name + "이(가) 병력을 " + actualLs + " 회복했습니다. (잔여 부상병: " + source.woundedHp + ")");
   }
 
   if (type === '책략' && source.skills.indexOf("충신의 기재") !== -1 && source.충신의기재Count < 4 && Math.random() < 0.5) {
@@ -339,7 +374,7 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
     }
   }
 
-  if (source.name === "관평" && type === '병기' && source.용의포효Count < 4 && Math.random() < 0.76) {
+  if (source.skills.indexOf("청룡 출격") !== -1 && type === '병기' && source.용의포효Count < 4 && Math.random() < 0.76) {
     source.용의포효Count++;
     if (target.threatState > 0) {
       logAction("🐉 [용의 포효] 위협 상태의 대상에게 연쇄 피해!");
@@ -421,15 +456,18 @@ function heal(source, target, coef, skillName, teamArray) {
     logAction("🌾 [군량 고갈] " + target.name + "이(가) 군량 고갈로 치유량이 감소했습니다!");
   }
 
-  // 🩸 [부상병 패치] 현재 쌓여있는 부상병 수치까지만 회복 가능
-  var availableWounded = Math.round(target.woundedHp || 0);
-  healAmt = Math.min(healAmt, availableWounded);
+  // ✅ 부상병이 음수나 비정상 값이 되지 않도록 Math.max 처리
+  var availableWounded = Math.max(0, Math.round(target.woundedHp || 0)); 
   
-  target.hp += healAmt;
-  target.woundedHp -= healAmt; // 회복된 만큼 부상병 목록에서 제거
-  source.totalHealingDone += healAmt;
+  // 실제 회복량은 계산된 healAmt와 남은 부상병 중 작은 값으로 제한
+  var finalHealAmt = Math.min(healAmt, availableWounded);
+  
+  target.hp += finalHealAmt;
+  target.woundedHp = Math.max(0, target.woundedHp - finalHealAmt); // 회복된 만큼 부상병 차감
+  source.totalHealingDone += finalHealAmt;
 
-  logAction("💚 [" + skillName + "] " + source.name + "이(가) " + target.name + "의 병력을 " + healAmt + " 회복시켰습니다.");
+  // 로그에도 제한되어 들어간 실제 회복량(finalHealAmt)을 출력하도록 수정
+  logAction("💚 [" + skillName + "] " + source.name + "이(가) " + target.name + "의 병력을 " + finalHealAmt + " 회복시켰습니다. (잔여 부상병: " + target.woundedHp + ")");
   
   if (source.strategies && source.strategies.indexOf("인의론") !== -1) {
     if (source !== target) { 
@@ -562,6 +600,25 @@ function performNormalAttack(source, target, allies, enemies) {
             aliveAllies[t].shieldStacks++;
             aliveAllies[t].damageTakenMod = Math.max(0.5, aliveAllies[t].damageTakenMod - 0.2);
           }
+        } else if (skill === "순간 돌습") {
+          target.command = Math.max(0, target.command - 30.9); // 2턴 감소
+          target.순간돌습Debuff = 2; 
+          logAction("📉 [순간 돌습] " + target.name + "의 통솔이 30.9 감소합니다. (2턴)");
+          dealDamage(source, target, 2.575, '병기', '순간 돌습', allies, enemies);
+          onDebuffInflicted(source, target, allies, enemies);
+        } else if (skill === "야습") {
+          var targets = getWeightedRandomTargets(targetDeck.filter(function(c){return c.hp>0;}), 2);
+          for (var t = 0; t < Math.min(2, targets.length); t++) {
+            var bonus = (source.speed > targets[t].speed) ? 0.5 : 0;
+            dealDamage(source, targets[t], 1.2 + bonus, '병기', '야습', allies, enemies);
+          }
+        } else if (skill === "철기병 돌격") {
+          source.critProb += 0.206; 
+          source.철기병돌격Buff = 2;
+          var currentTurn = typeof turn !== 'undefined' ? turn : 1;
+          var finalCoef = 4.12 * Math.pow(0.75, currentTurn - 1);
+          logAction("🏇 [철기병 돌격] 회심 증가 버프 획득 및 턴 비례 삭감된 계수(" + (finalCoef*100).toFixed(1) + "%)로 공격!");
+          dealDamage(source, target, finalCoef, '병기', '철기병 돌격', allies, enemies);
         }
       } else {
         logAction("  └ 🚫 [추격 실패] '" + skill + "' 전법 발동에 실패했습니다. (확률: " + (rate * 100).toFixed(1) + "%)");
