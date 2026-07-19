@@ -75,8 +75,9 @@ function isActiveSkill(skillName) {
 }
 
 function dealDamage(source, target, coef, type, skillName, allies, enemies) {
-if (source.hp <= 0 || target.hp <= 0) return 0;
+  if (source.hp <= 0 || target.hp <= 0) return 0;
   
+  // 1. 방어막, 회피, 백리의성 처리
   var hasSeoseong = allies.find(function(c) { return c.skills.indexOf("백리의성") !== -1 && c.hp > 0; });
   if (hasSeoseong && typeof turn !== 'undefined' && turn <= 4 && Math.random() < 0.25) {
     target.shieldStacks++;
@@ -89,7 +90,6 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
   var ignoreDodge = (source.백발백중 > 0);
   if (!ignoreDodge && Math.random() < dodgeChance) {
     logAction("🛡️ [회피] " + target.name + "이(가) " + source.name + "의 '" + skillName + "' 공격을 회피했습니다!");
-    
     if (target.name === "조운" && target.용담Count < 7) {
         target.용담Count++;
         logAction("⚡ [용담 반격] 조운의 칠진칠출 반격 개시! (횟수: " + target.용담Count + "/7)");
@@ -102,13 +102,12 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
     return 0;
   }
 
-  // [패치] 방어막 무효화 -> 70%~90% 랜덤 피해 감소 스택 소모로 변경
   var shieldMult = 1.0;
   if (target.shieldStacks > 0) {
     target.shieldStacks--;
-    var blockRate = 0.7 + Math.random() * 0.2; // 0.7 ~ 0.9 랜덤
+    var blockRate = 0.7 + Math.random() * 0.2;
     shieldMult = 1.0 - blockRate;
-    logAction("🧱 [방어막] " + target.name + "의 방어막 작동! 피해가 " + (blockRate*100).toFixed(1) + "% 감소합니다. (남은 방어막: " + target.shieldStacks + "개)");
+    logAction("🧱 [방어막] " + target.name + "의 방어막 작동! 피해가 " + (blockRate*100).toFixed(1) + "% 감소합니다.");
   }
 
   var relationMult = 1.0;
@@ -120,81 +119,135 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
     logAction("💥 [병종 상성 우세] " + source.name + "(" + source.troop + ") ➔ " + target.name + "(" + target.troop + ") (+15% 피해)");
   }
 
-  // [패치] 홍수(-20) 및 화공(-15) 디버프 스탯 감소 적용
-  var defCommand = target.command - (target.floodState > 0 ? 20 : 0);
-  if (source.pierce > 0) defCommand *= (1 - source.pierce);
+  // =================================================
+  // 🔴 [병법 패치] 턴(Turn) 및 중첩 기반 확률 스탯 보정
+  // =================================================
+  var isOdd = (typeof turn !== 'undefined' && turn % 2 !== 0);
+  var isEven = (typeof turn !== 'undefined' && turn % 2 === 0);
+  var isTurn1to4 = (typeof turn !== 'undefined' && turn <= 4);
+  var isTurn4Onwards = (typeof turn !== 'undefined' && turn >= 4);
+
+  var curPierce = source.pierce;
+  var curCrit = source.critProb;
+  var curSpellCrit = source.spellCritProb;
   
+  if (source.tacticMods) {
+      if (isOdd) {
+          curPierce += source.tacticMods.pierceOdd;
+          curCrit += source.tacticMods.critProbOdd;
+      }
+      if (isTurn1to4 && typeof turn !== 'undefined' && turn <= 3) curCrit += source.tacticMods.critProbTurn3;
+      if (isEven) curSpellCrit += source.tacticMods.spellCritProbEven;
+      curPierce += (source.tacticMods.stackPierce * 0.015); // '득세' 스택 (관통 증가)
+  }
+
+  var defCommand = target.command - (target.floodState > 0 ? 20 : 0);
+  if (curPierce > 0) defCommand *= (1 - curPierce);
   var defIntel = target.intel - (target.fireState > 0 ? 15 : 0);
   if (source.insight > 0) defIntel *= (1 - source.insight);
 
+  // 2. 기본 대미지 및 크리티컬 연산
   var baseDmg = 0;
   var critMult = (source.magicState > 0) ? 1.35 : 1.5;
-  if (source.critDamageMod) critMult += source.critDamageMod; // 철기령 보정 (+0.1)
+  if (source.critDamageMod) critMult += source.critDamageMod;
   var isCrit = false;
   var isSpellCrit = false;
 
   if (type === '병기') {
     baseDmg = (source.force * 1.5 - defCommand) * coef * relationMult;
     if (baseDmg < 50 * coef) baseDmg = 50 * coef;
-
-    var critChance = source.critProb;
-    if (skillName !== '척살' && Math.random() < critChance) {
+    if (skillName !== '척살' && Math.random() < curCrit) {
       baseDmg *= critMult;
       isCrit = true; 
-      logAction(source.magicState > 0 ? "💥 [회심] 요술에 걸려 회심 피해가 감소(135%)되어 들어갑니다!" : "💥 [회심] " + source.name + "의 회심(물리 크리티컬) 발동!");
+      logAction(source.magicState > 0 ? "💥 [회심] 요술에 걸려 회심 피해가 감소(135%)되어 들어갑니다!" : "💥 [회심] " + source.name + "의 회심 발동!");
     }
   } else {
     baseDmg = (source.intel * 1.5 - defIntel) * coef * relationMult;
     if (baseDmg < 50 * coef) baseDmg = 50 * coef;
-    if (Math.random() < source.spellCritProb) {
+    if (Math.random() < curSpellCrit) {
       baseDmg *= critMult;
       isSpellCrit = true; 
-      logAction(source.magicState > 0 ? "🔮 [묘책] 요술에 걸려 묘책 피해가 감소(135%)되어 들어갑니다!" : "🔮 [묘책] " + source.name + "의 묘책(책략 크리티컬) 발동!");
+      logAction(source.magicState > 0 ? "🔮 [묘책] 요술에 걸려 묘책 피해가 감소(135%)되어 들어갑니다!" : "🔮 [묘책] " + source.name + "의 묘책 발동!");
     }
   }
 
-  // [패치] 위협(피해 10% 증가) 및 허약(주는 피해 70% 감소) 적용
-  if (target.threatState > 0) baseDmg *= 1.1;
-  if (source.weakness > 0 && source.regenState <= 0) {
-    baseDmg *= 0.3;
-    logAction("❌ [허약] " + source.name + "이(가) 허약 상태로 가하는 피해가 70% 감소합니다.");
+  var troopMod = Math.sqrt(source.hp) / 50.0;
+  baseDmg *= troopMod;
+
+  // =================================================
+  // 🔴 [병법 패치] 공용 병법 피해/피격 증감 합연산 적용
+  // =================================================
+  var totalDmgMod = 1.0;
+  totalDmgMod += (source.damageDealtMod - 1.0); 
+  totalDmgMod += (target.damageTakenMod - 1.0); 
+
+  if (source.tacticMods) {
+      totalDmgMod += source.tacticMods.dmgDealt;
+      if (source.pos === '후열') totalDmgMod += source.tacticMods.dmgDealtIfBack;
+      if (source.pos === '전열') totalDmgMod += source.tacticMods.dmgDealtIfFront;
+      if (target.pos === '전열') totalDmgMod += source.tacticMods.dmgDealtToFront;
+      
+      var targetHasDebuff = target.silence > 0 || target.disarm > 0 || target.fear > 0 || target.weakness > 0 || target.confusion > 0 || target.magicState > 0 || target.stormState > 0 || target.floodState > 0 || target.fireState > 0 || target.threatState > 0;
+      if (targetHasDebuff) totalDmgMod += source.tacticMods.dmgDealtDebuffed; // 시리
+      if (target.command < source.command) totalDmgMod += source.tacticMods.dmgDealtToLowerCommand; // 속오
+
+      if (type === '병기') {
+          totalDmgMod += source.tacticMods.weaponDmg;
+          if (isTurn1to4) totalDmgMod += source.tacticMods.weaponDmgTurn4;
+          if (isOdd) totalDmgMod += source.tacticMods.weaponDmgOdd;
+          totalDmgMod += (source.tacticMods.stackWeaponDmg * 0.018); // 구전 스택
+      } else {
+          totalDmgMod += source.tacticMods.spellDmg;
+          if (isTurn4Onwards) totalDmgMod += source.tacticMods.spellDmgFromTurn4;
+          if (isEven) totalDmgMod += source.tacticMods.spellDmgEven;
+          totalDmgMod += (source.tacticMods.stackSpellDmg * 0.01); // 탈계 스택
+      }
+      if (isActiveSkill(skillName)) totalDmgMod += source.tacticMods.activeDmg; // 귀모
   }
+
+  if (target.tacticMods) {
+      totalDmgMod -= target.tacticMods.dmgTaken;
+      if (isTurn1to4) totalDmgMod -= target.tacticMods.dmgTakenTurn4;
+      if (target.pos === '후열') totalDmgMod -= target.tacticMods.dmgTakenIfBack;
+      if (target.pos === '전열') totalDmgMod -= target.tacticMods.dmgTakenIfFront;
+      
+      if (type === '병기') {
+          totalDmgMod -= target.tacticMods.weaponDmgTaken;
+          if (isTurn1to4) totalDmgMod -= target.tacticMods.weaponDmgTakenTurn4;
+      } else {
+          totalDmgMod -= target.tacticMods.spellDmgTaken;
+          if (isEven) totalDmgMod -= target.tacticMods.spellDmgTakenEven;
+      }
+  }
+
+  // 3. 기존 상태 이상 증감 로직 병합
+  if (target.threatState > 0) totalDmgMod += 0.1;
+  if (source.weakness > 0 && source.regenState <= 0) totalDmgMod -= 0.7;
+  if (target.허점공략State > 0) totalDmgMod -= 0.2756;
+  if (target.흥왕의위업State > 0) totalDmgMod -= 0.14;
+  if (target.skills.indexOf("위기의 결전") !== -1 && skillName === '일반 공격') totalDmgMod -= 0.212;
+  if (target.국색State > 0) totalDmgMod += 0.2;
   
-  baseDmg *= shieldMult; // 방어막 뎀감 적용
-
-  if (target.허점공략State > 0) baseDmg *= (1 - 0.2756);
-  if (target.흥왕의위업State > 0) {
-    baseDmg *= (1 - 0.14);
-  }
-
-  if (target.skills.indexOf("위기의 결전") !== -1 && skillName === '일반 공격') {
-      baseDmg *= (1 - 0.212);
-  }
-  
-  if (target.국색State > 0) {
-        baseDmg *= 1.2; 
-  }
-
   if (skillName === '척살') {
       var hasDebuff = target.silence > 0 || target.disarm > 0 || target.fear > 0 || target.weakness > 0 || target.confusion > 0 || target.magicState > 0 || target.stormState > 0 || target.floodState > 0 || target.fireState > 0 || target.grainExhaustState > 0 || target.threatState > 0;
-      if (hasDebuff) {
-        baseDmg *= 1.2;
-        logAction("⚡ [기병 돌격] 대상이 디버프 상태이므로 척살 피해가 20% 증가합니다!");
-      } 
+      if (hasDebuff) totalDmgMod += 0.2; 
   }
+  if (isActiveSkill(skillName) && source.skills.indexOf("신의 가호") !== -1) totalDmgMod += 0.15;
 
-  baseDmg *= source.damageDealtMod;
-  baseDmg *= target.damageTakenMod;
-  
-  if (isActiveSkill(skillName) && source.skills.indexOf("신의 가호") !== -1) {
-    baseDmg *= 1.15;
-  }
+  totalDmgMod = Math.max(0.1, totalDmgMod);
+  baseDmg *= totalDmgMod;
+  baseDmg *= shieldMult;
 
+  // 4. 최종 데미지 적용
   var finalDmg = Math.round(baseDmg + (Math.random() * 80 - 40));
   if (finalDmg < 10) finalDmg = 10;
   finalDmg = Math.min(finalDmg, target.hp);
 
   target.hp -= finalDmg;
+  
+  // 🩸 [부상병 패치] 대미지의 15%는 전사(회복 불가), 85%만 부상병으로 누적
+  target.woundedHp = (target.woundedHp || 0) + (finalDmg * 0.85);
+
   source.totalDamageDealt += finalDmg;
   target.totalDamageTaken += finalDmg;
   source.damageDealtThisTurn += finalDmg;
@@ -206,14 +259,50 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
 
   logAction("⚔️ [" + skillName + "] " + source.name + "이(가) " + target.name + "에게 " + finalDmg + "의 " + type + " 피해를 입혔습니다." + critTag + " (남은 병력: " + target.hp + ")");
   
+  // =================================================
+  // 🔴 [병법 패치] 타격 직후 병법 스택 중첩 획득 (가시성 추가)
+  // =================================================
+  if (source.tacticMods) {
+    if (type === '병기' && source.strategies.indexOf("구전") !== -1 && source.tacticMods.stackWeaponDmg < 5) {
+      source.tacticMods.stackWeaponDmg++;
+      logAction("  └ 📈 [구전 중첩] " + source.name + "의 병기 피해 1.8% 증가! (스택: " + source.tacticMods.stackWeaponDmg + "/5)");
+    }
+    if (type === '책략' && source.strategies.indexOf("탈계") !== -1 && source.tacticMods.stackSpellDmg < 8) {
+      source.tacticMods.stackSpellDmg++;
+      logAction("  └ 📈 [탈계 중첩] " + source.name + "의 책략 피해 1% 증가! (스택: " + source.tacticMods.stackSpellDmg + "/8)");
+    }
+    if (source.strategies.indexOf("득세") !== -1 && source.tacticMods.stackPierce < 5) {
+      source.tacticMods.stackPierce++;
+      logAction("  └ 📈 [득세 중첩] " + source.name + "의 관통 1.5% 증가! (스택: " + source.tacticMods.stackPierce + "/5)");
+    }
+  }
+
+  // 5. 후속 스킬 및 패시브 연계
   if (isCrit && source.skills.indexOf("기병 돌격") !== -1 && source.척살Count < 5) {
     source.척살Count++;
     logAction("⚡ [기병 돌격] 메인 타격 회심 적중! (턴 내 발동: " + source.척살Count + "/5)");
-    
     var prevPierce = source.pierce;
-    source.pierce = 1.0; // 일시적으로 통솔 무시 100% 적용
+    source.pierce = 1.0; 
     dealDamage(source, target, 0.6, '병기', '척살', allies, enemies);
-    source.pierce = prevPierce; // 공격 후 원상 복구
+    source.pierce = prevPierce; 
+  }
+
+  // 🔴 7. 흡혈 로직 독립 및 부상병 제한
+  if (type === '병기' && source.lifestealProb > 0) {
+    var lsAmt = Math.round(finalDmg * source.lifestealProb);
+    var actualLs = Math.min(lsAmt, Math.round(source.woundedHp || 0)); // 부상병만큼만 회복 가능
+    source.hp += actualLs;
+    source.woundedHp -= actualLs; // 회복한 만큼 부상병 차감
+    source.totalHealingDone += actualLs;
+    logAction("💚 [회유] " + source.name + "이(가) 병력을 " + actualLs + " 회복했습니다. (잔여 부상병: " + Math.round(source.woundedHp || 0) + ")");
+  }
+  if (type === '책략' && source.psyLifestealProb > 0) {
+    var lsAmt = Math.round(finalDmg * source.psyLifestealProb);
+    var actualLs = Math.min(lsAmt, Math.round(source.woundedHp || 0));
+    source.hp += actualLs;
+    source.woundedHp -= actualLs;
+    source.totalHealingDone += actualLs;
+    logAction("💚 [심리 공격] " + source.name + "이(가) 병력을 " + actualLs + " 회복했습니다. (잔여 부상병: " + Math.round(source.woundedHp || 0) + ")");
   }
 
   if (type === '책략' && source.skills.indexOf("충신의 기재") !== -1 && source.충신의기재Count < 4 && Math.random() < 0.5) {
@@ -225,22 +314,13 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
   if (type === '책략' && source.skills.indexOf("패잔병 척결") !== -1 && source.패잔병척결Count < 1) {
       if (Math.random() < 0.6) {
           source.패잔병척결Count++;
-          logAction("⚔️ [패잔병 척결] 책략 피해 적중! " + source.name + "이(가) 60% 확률로 일반 공격을 추가 시전합니다.");
+          logAction("⚔️ [패잔병 척결] 책략 피해 적중! 60% 확률로 일반 공격을 추가 시전합니다.");
           var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
           if (aliveEnemies.length > 0) {
               var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
               performNormalAttack(source, rEnemy, allies, enemies);
           }
-      } else {
-          logAction("  └ 🚫 [패잔병 척결] 발동 실패 (확률: 60%)");
       }
-  }
-
-  if (type === '병기' && source.lifestealProb > 0) {
-    heal(source, source, (finalDmg * source.lifestealProb) / source.intel, '회유');
-  }
-  if (type === '책략' && source.psyLifestealProb > 0) {
-    heal(source, source, (finalDmg * source.psyLifestealProb) / source.intel, '심리 공격');
   }
 
   var infoGen = allies.find(function(c) { return c.skills.indexOf("흥왕의 위업") !== -1 && c.hp > 0; });
@@ -271,7 +351,6 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
     }
   }
 
-  // --- 초선차전 피격 및 타격 시 반격 발동 ---
   if (source.skills.indexOf("초선차전") !== -1 && skillName !== "초선차전" && source.제갈량Count < 5 && Math.random() < 0.5) {
     source.제갈량Count++;
     var aliveEnemies = enemies.filter(function(c) { return c.hp > 0; });
@@ -284,7 +363,7 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
 
   if (target.skills.indexOf("초선차전") !== -1 && skillName !== "초선차전" && target.제갈량Count < 5 && Math.random() < 0.5) {
     target.제갈량Count++;
-    var aliveEnemies = allies.filter(function(c) { return c.hp > 0; }); // 타겟의 적군은 곧 소스의 아군
+    var aliveEnemies = allies.filter(function(c) { return c.hp > 0; }); 
     if (aliveEnemies.length > 0) {
       var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
       logAction("⚡ [초선차전] 피해를 받아 지휘 반격 발동! (횟수: " + target.제갈량Count + "/5)");
@@ -299,11 +378,11 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
 
   if (target.skills.indexOf("침착한 지휘") !== -1 && target.damageTakenThisTurn === 0) {
       var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
-      var targetEnemies = getWeightedRandomTargets(aliveEnemies, 2); // 가중치 적용
+      var targetEnemies = getWeightedRandomTargets(aliveEnemies, 2); 
       for(var t=0; t < targetEnemies.length; t++) {
           targetEnemies[t].damageTakenMod = Math.min(2.0, targetEnemies[t].damageTakenMod + 0.1); 
           if (Math.random() < 0.6) {
-              aliveEnemies[t].disarm = 2; // 60% 확률, 2턴간 부여
+              aliveEnemies[t].disarm = 2; 
               logAction("🛡️ [침착한 지휘] " + aliveEnemies[t].name + "에게 무장해제를 2턴간 부여합니다.");
           }
       }
@@ -315,8 +394,23 @@ if (source.hp <= 0 || target.hp <= 0) return 0;
 function heal(source, target, coef, skillName, teamArray) {
   if (!source || !target || source.hp <= 0 || target.hp <= 0) return 0;
   
-  var healAmt = Math.round(source.intel * coef);
-  if (skillName === "강동 제패") healAmt = Math.round(source.force * coef);
+  var troopMod = Math.sqrt(source.hp) / 50.0; 
+  var healAmt = Math.round(source.intel * coef * troopMod);
+  if (skillName === "강동 제패") healAmt = Math.round(source.force * coef * troopMod);
+
+  // =================================================
+  // 🔴 [병법 패치] 공용 병법 치유량 증감 연산
+  // =================================================
+  var healMod = 1.0;
+  if (source.tacticMods) {
+      healMod += source.tacticMods.healDone;
+      if (target.pos === '전열') healMod += source.tacticMods.healDoneToFront; // 연기
+  }
+  if (target.tacticMods) {
+      healMod += target.tacticMods.healTaken; // 치병
+      if (target.pos === '전열') healMod += target.tacticMods.healTakenIfFront; // 군용
+  }
+  healAmt = Math.round(healAmt * healMod);
 
   if (source.strategies && source.strategies.indexOf("인의론") !== -1) {
     healAmt = Math.round(healAmt * 1.12); 
@@ -327,9 +421,14 @@ function heal(source, target, coef, skillName, teamArray) {
     logAction("🌾 [군량 고갈] " + target.name + "이(가) 군량 고갈로 치유량이 감소했습니다!");
   }
 
-  healAmt = Math.min(healAmt, target.maxHp - target.hp);
+  // 🩸 [부상병 패치] 현재 쌓여있는 부상병 수치까지만 회복 가능
+  var availableWounded = Math.round(target.woundedHp || 0);
+  healAmt = Math.min(healAmt, availableWounded);
+  
   target.hp += healAmt;
+  target.woundedHp -= healAmt; // 회복된 만큼 부상병 목록에서 제거
   source.totalHealingDone += healAmt;
+
   logAction("💚 [" + skillName + "] " + source.name + "이(가) " + target.name + "의 병력을 " + healAmt + " 회복시켰습니다.");
   
   if (source.strategies && source.strategies.indexOf("인의론") !== -1) {
@@ -339,7 +438,6 @@ function heal(source, target, coef, skillName, teamArray) {
         source.인의론TurnTriggered = true; 
         source.인의론Count = 0; 
         
-        // typeof 방어 로직: 인자 없이 heal이 호출되어도 에러 발생 차단
         if (typeof teamArray !== "undefined" && teamArray) { 
           var aliveAllies = teamArray.filter(function(a) { return a.hp > 0 && a !== source; });
           if (aliveAllies.length > 0) {
@@ -419,7 +517,19 @@ function performNormalAttack(source, target, allies, enemies) {
           }
         } else if (skill === "원문사극") {
           dealDamage(source, target, 2.2, '병기', '원문사극', allies, enemies);
-          if (source.position === "후열" && Math.random() < 0.75) source.activeRateBonus = Math.min(0.3, source.activeRateBonus + 0.1);
+          if (source.position === "후열" && Math.random() < 0.75) {
+              if (!source.원문사극Buff) source.원문사극Buff = [];
+              if (source.원문사극Buff.length < 3) {
+                  source.activeRateBonus += 0.1;
+                  source.원문사극Buff.push(2); // 2턴 지속 스택 추가
+                  logAction("📈 [원문사극] 액티브 발동률 10% 증가! (현재 중첩: " + source.원문사극Buff.length + "/3)");
+              } else {
+                  // 중첩이 꽉 찼을 경우 지속시간만 갱신
+                  for(var i=0; i<source.원문사극Buff.length; i++) {
+                      if(source.원문사극Buff[i] < 2) { source.원문사극Buff[i] = 2; break; }
+                  }
+              }
+          }
         } else if (skill === "허점 공격") {
           var rEnemy = getWeightedRandomTargets(targetDeck.filter(function(c){return c.hp>0;}), 1)[0];
           if (rEnemy) {

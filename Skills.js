@@ -305,7 +305,11 @@ function castActiveSkill(skill, source, allies, enemies) {
       }
       break;
     case "파죽지세":
-      source.critProb = Math.min(0.5, source.critProb + 0.2);
+      if (source.파죽지세Buff <= 0) {
+          source.critProb += 0.2;
+      }
+      source.파죽지세Buff = 2; // 2턴 지속 부여
+      logAction("📈 [파죽지세] 2턴간 회심 확률이 20% 증가합니다.");
       aliveEnemies.forEach(function(e) { dealDamage(source, e, 1.4, '병기', '파죽지세', allies, enemies); });
       break;
     case "구름과 바람":
@@ -549,6 +553,36 @@ function decayStatusEffects(characters) {
     if (c.출사표Debuff > 0) {
       c.출사표Debuff--;
       if (c.출사표Debuff === 0) c.damageTakenMod -= 0.12;
+    }
+    // 1. 파죽지세 만료
+    if (c.파죽지세Buff > 0) {
+        c.파죽지세Buff--;
+        if (c.파죽지세Buff === 0) {
+            c.critProb -= 0.2;
+            logAction("🔻 [버프 종료] " + c.name + "의 '파죽지세' 지속시간이 만료되어 회심 확률이 감소했습니다.");
+        }
+    }
+    // 2. 원문사극 다중 스택 차감
+    if (c.원문사극Buff && c.원문사극Buff.length > 0) {
+        for (var i = c.원문사극Buff.length - 1; i >= 0; i--) {
+            c.원문사극Buff[i]--;
+            if (c.원문사극Buff[i] <= 0) {
+                c.원문사극Buff.splice(i, 1);
+                c.activeRateBonus -= 0.1;
+                logAction("🔻 [버프 종료] " + c.name + "의 '원문사극' 1스택이 만료되어 액티브 발동률이 감소했습니다.");
+            }
+        }
+    }
+    // 3. 충신의 기재 다중 스택 차감
+    if (c.충신의기재Buff && c.충신의기재Buff.length > 0) {
+        for (var i = c.충신의기재Buff.length - 1; i >= 0; i--) {
+            c.충신의기재Buff[i]--;
+            if (c.충신의기재Buff[i] <= 0) {
+                c.충신의기재Buff.splice(i, 1);
+                c.intel -= 10;
+                logAction("🔻 [버프 종료] " + c.name + "의 '충신의 기재' 1스택이 만료되어 지력이 감소했습니다.");
+            }
+        }
     }
   });
 }

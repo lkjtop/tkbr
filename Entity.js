@@ -36,6 +36,9 @@ function initChar(name, camp, troop, pos, force, intel, command, speed, skills, 
     패잔병척결Count: 0,
     인의론Count: 0, 인의론TurnTriggered: false,
     견결Buff: 0,
-    출사표Buff: 0, 출사표Debuff: 0
+    출사표Buff: 0, 출사표Debuff: 0,
+    파죽지세Buff: 0, 
+    원문사극Buff: [], 
+    충신의기재Buff: [],
   };
 }

@@ -49,7 +49,10 @@ function loadGameData(ss, sheet) {
         bonds.push({
           name: bondData[i][0],
           generals: bondData[i][1].toString().split(',').map(function(s) { return s.trim(); }),
-          effect: bondData[i][2] ? bondData[i][2].toString() : ""
+          effect: bondData[i][2] ? bondData[i][2].toString() : "",
+          // [인연 패치] E열(4)과 F열(5)의 TRUE/FALSE 값을 읽어와 불리언으로 저장
+          activeA: String(bondData[i][4]).toUpperCase() === "TRUE",
+          activeB: String(bondData[i][5]).toUpperCase() === "TRUE"
         });
       }
     }

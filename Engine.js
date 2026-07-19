@@ -27,8 +27,9 @@ function simulateBattle() {
   settleCampBonus(enemies);
   settleTroopBonus(allies);
   settleTroopBonus(enemies);
-  settleBondBonus(allies, bonds);
-  settleBondBonus(enemies, bonds);
+  // [인연 패치] A/B 식별자 추가
+  settleBondBonus(allies, bonds, 'A'); 
+  settleBondBonus(enemies, bonds, 'B');
   settleFormationBonus(allies, aFormation);
   settleFormationBonus(enemies, bFormation);
   settleStrategyBonus(allies);
@@ -260,26 +261,53 @@ function settleTroopBonus(team) {
   });
 }
 
-function settleBondBonus(team, bonds) {
+function settleBondBonus(team, bonds, teamId) {
   bonds.forEach(function(bond) {
-    var matches = team.filter(function(c) { return bond.generals.indexOf(c.name) !== -1; });
-    if (matches.length >= 2) {
-      logAction("🔗 [인연 결산] '" + bond.name + "' 활성화! (대상 무장: " + matches.map(function(m){return m.name;}).join(", ") + ")");
-      matches.forEach(function(c) {
-        if (bond.name === "강표의 호신") { c.command += 10; c.damageTakenMod *= 0.97; }
-        else if (bond.name === "천하삼분") { c.damageTakenMod *= 0.94; }
-        else if (bond.name === "도원결의") { c.도원결의Active = true; }
-        else if (bond.name === "완벽한 조합") { c.damageTakenMod *= 0.94; }
-        else if (bond.name === "황실의 인연") { c.damageTakenMod *= 0.94; }
-        else if (bond.name === "소열제") { c.소열제Active = true; }
-        else if (bond.name === "오호상장") { c.critProb += 0.10; }
-        else if (bond.name === "서량의 철기") { c.damageDealtMod *= 1.08; }
-        else if (bond.name === "서량의 영웅") { c.damageDealtMod *= 1.05; }
-        else if (bond.name === "오국의 미녀") { c.intel += 20; }
-        else if (bond.name === "노익장") { c.damageTakenMod *= 0.95; }
-        else if (bond.name === "동오 대도독") { c.damageDealtMod *= 1.08; }
-        else if (bond.name === "괄목상대") { c.damageTakenMod *= 0.88; }
-      });
+    
+    // [인연 패치] 엔진에서 복잡하게 계산하지 않고, 오직 DB의 TRUE/FALSE 값만 참조!
+    var isActive = (teamId === 'A') ? bond.activeA : bond.activeB;
+    
+    if (isActive) {
+      // 인연 효과를 부여할 대상 찾기 (시트에 등록된 장수에게만 효과 적용)
+      var matches = team.filter(function(c) { return bond.generals.indexOf(c.name) !== -1; });
+      
+      if (matches.length > 0) {
+        logAction("🔗 [" + teamId + "덱 인연] DB 연동! '" + bond.name + "' 활성화 (적용 대상: " + matches.map(function(m){return m.name;}).join(", ") + ")");
+        
+        matches.forEach(function(c) {
+          if (!c.tacticMods) c.tacticMods = {}; 
+
+          // --- 28종 인연 버프 완벽 적용 ---
+          if (bond.name === "강표의 호신") { c.command += 10; c.damageTakenMod *= 0.97; }
+          else if (bond.name === "천하삼분") { c.damageTakenMod *= 0.94; }
+          else if (bond.name === "도원결의") { c.도원결의Active = true; }
+          else if (bond.name === "완벽한 조합") { c.tacticMods.spellDmgTaken = (c.tacticMods.spellDmgTaken || 0) + 0.06; }
+          else if (bond.name === "황실의 인연") { c.tacticMods.weaponDmgTaken = (c.tacticMods.weaponDmgTaken || 0) + 0.06; }
+          else if (bond.name === "소열제") { c.소열제Active = true; } // 1인 인연도 이제 정상 발동
+          else if (bond.name === "오호상장") { c.critProb += 0.10; }
+          else if (bond.name === "서량의 철기") { c.tacticMods.pursuitDmg = (c.tacticMods.pursuitDmg || 0) + 0.08; } 
+          else if (bond.name === "서량의 영웅") { c.tacticMods.weaponDmg = (c.tacticMods.weaponDmg || 0) + 0.05; }
+          else if (bond.name === "오국의 미녀") { c.intel += 20; }
+          else if (bond.name === "노익장") { c.damageTakenMod *= 0.95; }
+          else if (bond.name === "동오 대도독") { c.psyLifestealProb += 0.08; }
+          else if (bond.name === "괄목상대") { c.tacticMods.activeDmgTaken = (c.tacticMods.activeDmgTaken || 0) + 0.12; }
+          else if (bond.name === "좌우군 와해") { c.force += 20; }
+          else if (bond.name === "만궁일격") { c.tacticMods.normalDmg = (c.tacticMods.normalDmg || 0) + 0.08; }
+          else if (bond.name === "경건한 의식") { c.command += 20; }
+          else if (bond.name === "강동의 대업") { c.tacticMods.dmgDealt = (c.tacticMods.dmgDealt || 0) + 0.07; }
+          else if (bond.name === "신정 격전") { c.force += 20; }
+          else if (bond.name === "오자양장") { c.pierce += 0.06; }
+          else if (bond.name === "우아한 자태") { c.우아한자태Active = true; } 
+          else if (bond.name === "깊은 의리") { c.pierce += 0.06; }
+          else if (bond.name === "난세의 미인") { c.shieldStacks = (c.shieldStacks || 0) + 2; }
+          else if (bond.name === "5대 군사") { c.insight += 0.05; c.damageTakenMod *= 0.96; }
+          else if (bond.name === "한말의 혼란") { c.command += 20; }
+          else if (bond.name === "서촉의 지혜") { c.tacticMods.spellDmgTaken = (c.tacticMods.spellDmgTaken || 0) + 0.08; }
+          else if (bond.name === "황건봉기") { c.tacticMods.activeProb = (c.tacticMods.activeProb || 0) + 0.08; }
+          else if (bond.name === "하북 정장") { c.force += 20; }
+          else if (bond.name === "궁술 대결") { c.pierce += 0.05; }
+        });
+      }
     }
   });
 }
@@ -335,16 +363,123 @@ function settleFormationBonus(team, formation) {
 
 function settleStrategyBonus(team) {
   team.forEach(function(c) {
+// =========================================================
+    // 📖 [신규 패치] 78종 공용 병법 100% 파싱 시스템 (공백 제거 포함)
+    // =========================================================
+    c.tacticMods = {
+        // [주는 피해 증감]
+        dmgDealt: 0, dmgDealtDebuffed: 0, dmgDealtToHighestHp: 0, dmgDealtToOppositeSex: 0,
+        dmgDealtIfBack: 0, dmgDealtIfFront: 0, dmgDealtToFront: 0, dmgDealtToLowerCommand: 0,
+        weaponDmg: 0, weaponDmgTurn4: 0, weaponDmgOdd: 0, 
+        spellDmg: 0, spellDmgFromTurn4: 0, spellDmgEven: 0, activeDmg: 0,
+        
+        // [받는 피해 증감]
+        dmgTaken: 0, dmgTakenTurn4: 0, dmgTakenIfBack: 0, dmgTakenIfFront: 0,
+        weaponDmgTaken: 0, weaponDmgTakenTurn4: 0, spellDmgTaken: 0, spellDmgTakenEven: 0,
+        
+        // [확률 및 스탯 보정]
+        critProbOdd: 0, critProbTurn3: 0, spellCritProbEven: 0, 
+        pierceOdd: 0, lifestealOdd: 0, psyLifestealEven: 0,
+        dodgeTurn4: 0, dodgeIfFront: 0, activeProb: 0, activeProbTurn3: 0, counterProb: 0,
+        
+        // [치유량 증감]
+        healTaken: 0, healTakenIfFront: 0, healDone: 0, healDoneToFront: 0,
+        
+        // [전투 중첩형 (Stack) 카운터]
+        stackWeaponDmg: 0, stackSpellDmg: 0, stackPierce: 0, stackForceUp: 0, 
+        stackDmgTakenDown: 0, stackDmgDealtUp: 0, stackDmgTakenUpByAlly: 0, stackSpellCrit: 0,
+        
+        // [특수 트리거]
+        ignoreDodgeFirstHit: false, dmgTakenDownAfterActive: false
+    };
+
+    var appliedCommonStrats = [];
+
+    // 병법.csv 78종 전체 목록
+    var knownCommons = [
+        "왕도", "시리", "작전", "승전", "구전", "병도", "요적", "기지", "탈계", "심리", "현기", "군쟁", "기동", "귀모", "여심", "임시", "호익", "불양", "강전", "적무", "선전", "속오", "피험", "병정", "수세", "수토", "기예", "금고", "승민", "합전", "겸자", "모전", "연지", "연사", "문무", "치병", "군용", "무열", "기임", "근선", "병교", "적용", "적모", "합모", "선용", "위수", "임봉", "대파", "절봉", "병령", "호세", "저력", "연기", "고무", "선위", "원도", "선지", "비전", "정시", "피용", "겁지", "적복", "분적", "적음", "공적", "파적", "득세", "차세", "원관", "고군", "분합", "분치", "삼청", "모복", "후기", "약지", "모령", "위지"
+    ];
+
     c.strategies.forEach(function(strat) {
-      if (!strat) return;
-      // [병법.csv 전담] 향후 DB에 등록된 고유/공용 병법만 이곳에 추가됩니다.
-      if (strat.indexOf("출사표") !== -1) { c.intel += 15; logAction("📖 [고유병법] " + c.name + ": '출사표' 효과 (지력 +15)"); }
-      else if (strat.indexOf("철기령") !== -1) {
-        c.critProb += 0.06; 
-        c.critDamageMod = 0.10; // 회심 피해 10% 증가
-        logAction("📖 [고유병법] " + c.name + ": '철기령' 적용 (회심 +6%, 회심 피해 +10%)");
-      }
+        if (!strat) return;
+        var s = strat.trim(); 
+        
+        // --- 1. 고유 병법 ---
+        if (s.indexOf("출사표") !== -1) { c.intel += 15; logAction("📖 [고유병법] " + c.name + ": '출사표' 효과 (지력 +15)"); }
+        else if (s.indexOf("철기령") !== -1) { c.critProb += 0.06; c.critDamageMod = 0.10; logAction("📖 [고유병법] " + c.name + ": '철기령' 적용"); }
+        else if (knownCommons.indexOf(s) !== -1) { appliedCommonStrats.push(s); }
+
+        // --- 2. 78종 공용 병법 파싱 분기 ---
+        
+        // (1) 주는 피해 증감
+        if (s === "왕도") c.tacticMods.dmgDealt += 0.05;
+        else if (s === "시리") c.tacticMods.dmgDealtDebuffed += 0.08;
+        else if (s === "작전") c.tacticMods.weaponDmg += 0.065;
+        else if (s === "승전") c.tacticMods.weaponDmgTurn4 += 0.08;
+        else if (s === "병도") c.tacticMods.weaponDmgOdd += 0.099;
+        else if (s === "요적") c.tacticMods.spellDmg += 0.06;
+        else if (s === "기지") c.tacticMods.spellDmgFromTurn4 += 0.10;
+        else if (s === "심리") c.tacticMods.spellDmgEven += 0.09;
+        else if (s === "현기") c.tacticMods.dmgDealtIfBack += 0.06;
+        else if (s === "군쟁") c.tacticMods.dmgDealtToFront += 0.08;
+        else if (s === "적무") c.tacticMods.dmgDealtIfFront += 0.055;
+        else if (s === "속오") c.tacticMods.dmgDealtToLowerCommand += 0.055;
+        else if (s === "불양") c.tacticMods.dmgDealtToOppositeSex += 0.07;
+        else if (s === "강전") c.tacticMods.dmgDealtToHighestHp += 0.07;
+        
+        // (2) 전법 및 특수 발동
+        else if (s === "기동") c.tacticMods.activeProb += 0.03;
+        else if (s === "여심") c.tacticMods.activeProbTurn3 += 0.05;
+        else if (s === "귀모") c.tacticMods.activeDmg += 0.08;
+        else if (s === "임시") c.tacticMods.dmgTakenDownAfterActive = true; 
+        else if (s === "호익") c.tacticMods.ignoreDodgeFirstHit = true; 
+
+        // (3) 받는 피해 증감
+        else if (s === "피험") c.tacticMods.dmgTaken += 0.045;
+        else if (s === "병정") c.tacticMods.dmgTakenTurn4 += 0.06;
+        else if (s === "수세") c.tacticMods.dmgTakenIfBack += 0.05;
+        else if (s === "수토") c.tacticMods.dmgTakenIfFront += 0.05;
+        else if (s === "합전") c.tacticMods.weaponDmgTaken += 0.055;
+        else if (s === "선전") c.tacticMods.weaponDmgTakenTurn4 += 0.09;
+        else if (s === "모전") c.tacticMods.spellDmgTaken += 0.055;
+        else if (s === "연지") c.tacticMods.spellDmgTakenEven += 0.09;
+
+        // (4) 스탯 즉시 반영 병법
+        else if (s === "겸자") c.force += c.intel * 0.12;
+        else if (s === "문무") c.intel += c.force * 0.12;
+        else if (s === "연사") c.command += 15;
+        else if (s === "기예") c.dodgeProb += 0.045;
+        else if (s === "승민") c.tacticMods.dodgeIfFront += 0.05;
+        else if (s === "금고") c.tacticMods.dodgeTurn4 += 0.06;
+        else if (s === "적복") c.critProb += 0.03;
+        else if (s === "삼청") c.spellCritProb += 0.03;
+        else if (s === "파적") c.pierce += 0.06;
+        else if (s === "약지") c.insight += 0.06;
+        else if (s === "원관") c.lifestealProb += 0.05;
+        else if (s === "모령") c.psyLifestealProb += 0.05;
+        else if (s === "분합") c.tacticMods.counterProb += 0.08;
+
+        // (5) 확률 조건부 보정
+        else if (s === "분적") c.tacticMods.critProbOdd += 0.055;
+        else if (s === "적음") c.tacticMods.critProbTurn3 += 0.05;
+        else if (s === "모복") c.tacticMods.spellCritProbEven += 0.055;
+        else if (s === "차세") c.tacticMods.pierceOdd += 0.09;
+        else if (s === "고군") c.tacticMods.lifestealOdd += 0.08;
+        else if (s === "위지") c.tacticMods.psyLifestealEven += 0.09;
+        
+        // (6) 치유 증감
+        else if (s === "치병") c.tacticMods.healTaken += 0.06;
+        else if (s === "군용") c.tacticMods.healTakenIfFront += 0.08;
+        else if (s === "고무") c.tacticMods.healDone += 0.06;
+        else if (s === "연기") c.tacticMods.healDoneToFront += 0.08;
+        
+        // (7) 아군 시너지 및 연계 버프 (비전, 선지, 선위, 피용, 겁지 등은 초기화 시 팀 버퍼에 별도 반영 요망)
+        // (현재 객체에 속성만 부여하고 Combat.js나 Engine.js 아군 버프 페이즈에서 처리)
     });
+
+    if (appliedCommonStrats.length > 0) {
+        logAction("📖 [공용병법 스캔] " + c.name + " (" + appliedCommonStrats.length + "종 적용): " + appliedCommonStrats.join(", "));
+    }
   });
 }
 
