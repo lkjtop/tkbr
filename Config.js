@@ -13,6 +13,7 @@ var bonds = [];
 var skillRates = {};
 var skillTypes = {};
 var uniqueRates = {};
+var genGenders = {};
 
 function logAction(msg) {
   if (isLogging) {

@@ -77,6 +77,15 @@ function loadGameData(ss, sheet) {
   uniqueRates = {};
   if (generalSheet) {
     var genData = generalSheet.getDataRange().getValues();
+
+    // 🚻 [패치] 헤더(2행, 인덱스 1)에서 '성별' 열의 위치를 동적으로 탐색
+    var genderColIdx = -1;
+    if (genData.length > 1) {
+        for (var c = 0; c < genData[1].length; c++) {
+            if (genData[1][c].toString().trim() === "성별") genderColIdx = c;
+        }
+    }
+
     for (var i = 2; i < genData.length; i++) {
       if (genData[i][1]) {
         var rawRate = genData[i][11];
@@ -86,6 +95,11 @@ function loadGameData(ss, sheet) {
         uniqueRates[genData[i][1]] = rate > 1.0 ? rate / 100 : rate;
         if (genData[i][9]) {
           skillTypes[genData[i][8]] = genData[i][9]; 
+        }
+
+        // 🚻 [패치] 찾은 열 위치를 바탕으로 이름-성별 매핑 저장
+        if (genderColIdx !== -1) {
+            genGenders[genData[i][1]] = genData[i][genderColIdx].toString().trim();
         }
       }
     }
@@ -99,10 +113,17 @@ function writeMultiResults(sheet, winnerStr, turns, aHp, aDmg, aRec, aHeal, bHp,
   var data = multiOutRange.getValues();
   data[0][0] = winnerStr; 
   data[1][0] = turns.toFixed(1) + " 턴";
+  // 🔴 [패치] A덱 장수 이름 동기화
+  data[2] = ["합계", aNames[0] || "", aNames[1] || "", aNames[2] || ""];
+
   data[3] = [aHp.reduce(function(a,b){return a+b},0), aHp[0], aHp[1], aHp[2]];
   data[4] = [aDmg.reduce(function(a,b){return a+b},0), aDmg[0], aDmg[1], aDmg[2]];
   data[5] = [aRec.reduce(function(a,b){return a+b},0), aRec[0], aRec[1], aRec[2]];
   data[6] = [aHeal.reduce(function(a,b){return a+b},0), aHeal[0], aHeal[1], aHeal[2]];
+  
+  // 🔴 [패치] B덱 장수 이름 동기화
+  data[7] = ["합계", bNames[0] || "", bNames[1] || "", bNames[2] || ""];
+
   data[8] = [bHp.reduce(function(a,b){return a+b},0), bHp[0], bHp[1], bHp[2]];
   data[9] = [bDmg.reduce(function(a,b){return a+b},0), bDmg[0], bDmg[1], bDmg[2]];
   data[10] = [bRec.reduce(function(a,b){return a+b},0), bRec[0], bRec[1], bRec[2]];
@@ -115,10 +136,17 @@ function writeSingleResults(sheet, winnerStr, turns, aHp, aDmg, aRec, aHeal, bHp
   var data = singleOutRange.getValues();
   data[0][0] = winnerStr; 
   data[1][0] = turns + " 턴";
+  // 🔴 [패치] A덱 장수 이름 동기화
+  data[2] = ["합계", aNames[0] || "", aNames[1] || "", aNames[2] || ""];
+
   data[3] = [aHp.reduce(function(a,b){return a+b},0), aHp[0], aHp[1], aHp[2]];
   data[4] = [aDmg.reduce(function(a,b){return a+b},0), aDmg[0], aDmg[1], aDmg[2]];
   data[5] = [aRec.reduce(function(a,b){return a+b},0), aRec[0], aRec[1], aRec[2]];
   data[6] = [aHeal.reduce(function(a,b){return a+b},0), aHeal[0], aHeal[1], aHeal[2]];
+  
+  // 🔴 [패치] B덱 장수 이름 동기화
+  data[7] = ["합계", bNames[0] || "", bNames[1] || "", bNames[2] || ""];
+
   data[8] = [bHp.reduce(function(a,b){return a+b},0), bHp[0], bHp[1], bHp[2]];
   data[9] = [bDmg.reduce(function(a,b){return a+b},0), bDmg[0], bDmg[1], bDmg[2]];
   data[10] = [bRec.reduce(function(a,b){return a+b},0), bRec[0], bRec[1], bRec[2]];

@@ -6,6 +6,40 @@
 function onDebuffInflicted(source, target, sourceTeam, targetTeam) {
   if (!source || !target || source.hp <= 0 || target.hp <= 0) return;
   
+  // 🟢 [스택/트리거형 8종 동기화] 디버프 피격 시 '분치' 뎀감 스택
+  if (target.tacticMods && target.tacticMods.bunchi) {
+      if (target.bunchiStacks < 5) target.bunchiStacks++;
+  }
+
+  // 🔴 [고유병법 - 디버프 발생 연계 (요술, 지군, 화계)]
+  if (target.magicState > 0 && source.strategies && source.strategies.indexOf("태평도법(요술)") !== -1) {
+      if (target.태평도법Debuff !== 2) {
+          target.tacticMods.activeDmgTaken = (target.tacticMods.activeDmgTaken || 0) + 0.10;
+          target.태평도법Debuff = 2; // 2턴 지속
+          logAction("📖 [고유병법] '태평도법(요술)' 연계! " + target.name + "의 받는 액티브 피해가 2턴간 10% 증가합니다.");
+      }
+  }
+  if (target.disarm > 0 && source.strategies && source.strategies.indexOf("지군") !== -1) {
+      target.damageDealtMod -= 0.10;
+      target.지군Debuff = 1;
+      logAction("📖 [고유병법] '지군' 연계! 무장해제된 " + target.name + "의 주는 피해가 1턴간 10% 감소합니다.");
+  }
+  
+  if (target.fireState > 0) {
+      sourceTeam.concat(targetTeam).forEach(function(member) {
+          if (member.hp > 0 && member.strategies && member.strategies.indexOf("화계") !== -1) {
+              if ((member.화계Count || 0) < 2 && Math.random() < 0.35) {
+                  member.화계Count = (member.화계Count || 0) + 1;
+                  logAction("🔥 [고유병법] '화계' 발동! 주유가 화공을 감지하여 추가 피해를 줍니다. (턴 내 발동: " + member.화계Count + "/2)");
+                  var hisEnemies = (sourceTeam.indexOf(member) !== -1) ? targetTeam : sourceTeam;
+                  var hisAllies = (sourceTeam.indexOf(member) !== -1) ? sourceTeam : targetTeam;
+                  var targetOpp = getWeightedRandomTargets(hisEnemies.filter(function(e){return e.hp>0;}), 2);
+                  for(var i=0; i<targetOpp.length; i++) dealDamage(member, targetOpp[i], 0.6, '책략', '화계', hisAllies, hisEnemies, false);
+              }
+          }
+      });
+  }
+
   // 1. 세금 과징수 (자신이 디버프를 부여했을 때 개별 발동)
   if (source.skills.indexOf("세금 과징수") !== -1) {
     if (source.세금과징수Count < 10) {
@@ -53,6 +87,33 @@ function onDebuffInflicted(source, target, sourceTeam, targetTeam) {
       }
     }
   });
+
+  // 3. 기지의 승리 (적군/아군 이상 상태 발생 시 주유 감지 및 발동)
+  sourceTeam.concat(targetTeam).forEach(function(member) {
+    if (member.hp > 0 && member.skills.indexOf("기지의 승리") !== -1) {
+      if ((member.기지의승리Count || 0) < 4 && Math.random() < 0.7) {
+        member.기지의승리Count = (member.기지의승리Count || 0) + 1;
+        logAction("🔥 [기지의 승리] 이상 상태 감지! 주유가 기지를 발동합니다. (턴 내 발동: " + member.기지의승리Count + "/4)");
+        
+        var hisEnemies = (sourceTeam.indexOf(member) !== -1) ? targetTeam : sourceTeam;
+        var hisAllies = (sourceTeam.indexOf(member) !== -1) ? sourceTeam : targetTeam;
+        var aliveOpp = hisEnemies.filter(function(e) { return e.hp > 0; });
+        var targetOpp = getWeightedRandomTargets(aliveOpp, 2);
+        
+        for (var t = 0; t < targetOpp.length; t++) {
+           dealDamage(member, targetOpp[t], 0.6, '책략', '기지의 승리', hisAllies, hisEnemies, false);
+        }
+
+        // 4회 누적 시 전체 회복
+        if (member.기지의승리Count === 4) {
+           logAction("💚 [기지의 승리] 4회 누적 발동 달성! 아군 전체의 병력을 회복합니다.");
+           hisAllies.forEach(function(ally) {
+               if (ally.hp > 0) heal(member, ally, 0.4, "기지의 승리");
+           });
+        }
+      }
+    }
+  });
 }
 
 function castActiveSkill(skill, source, allies, enemies) {
@@ -70,13 +131,76 @@ function castActiveSkill(skill, source, allies, enemies) {
 
   logAction("🔥 [액티브] " + source.name + "이(가) '" + skill + "' 전법을 시전합니다!");
 
+  // 🛡️ [패치] '임시' 병법: 액티브 발동 후 2턴간 받는 피해 감소
+  if (source.tacticMods && source.tacticMods.dmgTakenDownAfterActive) {
+      if (source.imsiBuffTurns <= 0) {
+          source.damageTakenMod -= 0.055; 
+      }
+      source.imsiBuffTurns = 2; // 버프 지속 갱신
+      logAction("🛡️ [임시] 액티브 발동! 2턴간 받는 피해가 5.5% 감소합니다.");
+  }
+
   switch(skill) {
+    case "청낭 치료":
+      // 1. 병력이 가장 낮은 아군 찾기
+      var lowestHpAlly = aliveAllies.sort(function(x, y) { return x.hp - y.hp; })[0];
+      
+      if (lowestHpAlly) {
+          // 2. 현재 걸려있는 제어/상태 이상 디버프 스캔
+          var debuffs = [];
+          var checkList = ['silence', 'disarm', 'fear', 'weakness', 'confusion', 'magicState', 'stormState', 'floodState', 'fireState', 'grainExhaustState', 'threatState', '탈주병State'];
+          
+          for (var d = 0; d < checkList.length; d++) {
+              if (lowestHpAlly[checkList[d]] > 0) debuffs.push(checkList[d]);
+          }
+          
+          // 3. 디버프 최대 3개 제거
+          var removedCount = 0;
+          while (debuffs.length > 0 && removedCount < 3) {
+              var toRemoveIdx = Math.floor(Math.random() * debuffs.length);
+              var debuffName = debuffs[toRemoveIdx];
+              
+              lowestHpAlly[debuffName] = 0; // 상태 해제
+              debuffs.splice(toRemoveIdx, 1); // 배열에서 제거
+              removedCount++;
+          }
+          
+          if (removedCount > 0) {
+              logAction("✨ [청낭 치료] " + lowestHpAlly.name + "의 디버프를 " + removedCount + "개 제거했습니다!");
+          }
+          
+          // 4. 병력 회복 (치유율 260%)
+          heal(source, lowestHpAlly, 2.6, "청낭 치료");
+      }
+      break;
+    case "천향":
+      var hasGonggeun = (source.strategies && source.strategies.indexOf("공근신") !== -1);
+      var healCoef = hasGonggeun ? 1.25 : 2.5; // 치유 효과 50% 감소
+      for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
+        aliveEnemies[t].weakness = 1;
+        logAction("🥀 [천향] " + aliveEnemies[t].name + "에게 허약 1턴 부여.");
+        onDebuffInflicted(source, aliveEnemies[t], allies, enemies);
+      }
+      for (var t = 0; t < Math.min(2, aliveAllies.length); t++) {
+        heal(source, aliveAllies[t], healCoef, "천향");
+      }
+      break;
     case "비분시":
+      var hasHoga = (source.strategies && source.strategies.indexOf("호가십팔박") !== -1);
+      var healCoef = hasHoga ? 0.96 : 1.2; // 치유 효과 20% 감소
       aliveAllies.forEach(function(ally) {
-        heal(source, ally, 1.2, "비분시");
+        heal(source, ally, healCoef, "비분시");
         ally.shieldStacks++;
-        if (ally.idx === 0) heal(source, ally, 0.5, "비분시");
+        if (ally.position === '전열') heal(source, ally, hasHoga ? 0.4 : 0.5, "비분시");
       });
+      if (hasHoga) {
+          var targetOpp = getWeightedRandomTargets(aliveEnemies, 2);
+          targetOpp.forEach(function(enemy) {
+              enemy.intel = Math.max(0, enemy.intel - 30);
+              enemy.호가십팔박Debuff = 1;
+              logAction("🎶 [고유병법] '호가십팔박' 적용! " + enemy.name + "의 지력이 1턴간 30 감소합니다.");
+          });
+      }
       break;
     case "장군의 무용":
       source.silence = 2;
@@ -103,14 +227,21 @@ function castActiveSkill(skill, source, allies, enemies) {
       }
       break;
     case "무열황제":
+      // 💥 [역산 패치] 무력/통솔 중 더 높은 스탯의 10%만큼 통솔 추가 감소
+      var maxStat = Math.max(source.force, source.command);
+      var baseReduction = 40 + (maxStat * 0.1); 
       var commandDiff = target.command > source.command;
-      var reduction = commandDiff ? 60 : 40;
+      var reduction = commandDiff ? baseReduction * 1.5 : baseReduction;
+      
       target.손견통솔Debuff = 2;
       target.손견통솔DebuffAmt = reduction;
-      target.command = Math.max(0, target.command - reduction); // 2턴 지속으로 변경됨
-      dealDamage(source, target, 2.5, '병기', '무열황제', allies, enemies);
+      target.command = Math.max(0, target.command - reduction); 
+      
+      // 데미지 역시 통솔 비례로 증가 (기본 2.5배 + 통솔 1당 0.1% 추가)
+      var dmgMod = 2.5 + (source.command * 0.001);
+      dealDamage(source, target, dmgMod, '병기', '무열황제', allies, enemies);
       target.fear = 1;
-      logAction("💤 [무열황제] " + target.name + "의 통솔을 " + reduction + " 감소시키고 공포를 1턴 부여합니다.");
+      logAction("💤 [무열황제] " + target.name + "의 통솔을 " + reduction.toFixed(1) + " 감소시키고 공포를 1턴 부여합니다.");
       onDebuffInflicted(source, target, allies, enemies);
       break;
     case "백의도강":
@@ -129,6 +260,16 @@ function castActiveSkill(skill, source, allies, enemies) {
       heal(source, source, 0.65, "강동 제패");
       var rAlly = aliveAllies[Math.floor(Math.random() * aliveAllies.length)];
       if (rAlly) heal(source, rAlly, 0.65, "강동 제패");
+      
+      if (source.strategies && source.strategies.indexOf("패왕전") !== -1 && Math.random() < 0.65) {
+          var debuffs = ['silence', 'disarm', 'fear', 'weakness', 'confusion', 'magicState', 'stormState', 'floodState', 'fireState', 'grainExhaustState', 'threatState'];
+          var activeDebuffs = debuffs.filter(function(d) { return source[d] > 0; });
+          if (activeDebuffs.length > 0) {
+              var toRemove = activeDebuffs[Math.floor(Math.random() * activeDebuffs.length)];
+              source[toRemove] = 0;
+              logAction("📖 [고유병법] '패왕전' 발동! 손책의 제어 효과 1개를 정화합니다.");
+          }
+      }
       break;
     case "고육지계":
       // 1. 통솔 비례 피해 감소량 연산 (기본 30% + 통솔 1당 0.03% 추가 감소 예시)
@@ -215,6 +356,10 @@ function castActiveSkill(skill, source, allies, enemies) {
       break;
     case "화하 진압":
       var threatCount = aliveEnemies.filter(function(e) { return e.threatState > 0; }).length;
+      // 🐛 [버그 픽스] 기존 버프가 있다면 먼저 제거하여 무한 중첩 방지
+      if (source.관우액티브Buff > 0) {
+          source.activeRateBonus -= source.관우액티브BuffAmt;
+      }
       source.관우액티브Buff = 2;
       source.관우액티브BuffAmt = 0.08 + threatCount * 0.03;
       source.activeRateBonus += source.관우액티브BuffAmt; // 2턴 지속으로 변경됨
@@ -327,7 +472,19 @@ function castActiveSkill(skill, source, allies, enemies) {
       if (source.stormState > 0) source.dodgeProb = Math.min(0.5, source.dodgeProb + 0.1);
       break;
     case "찬란한 위명":
-      source.lifestealProb = Math.min(0.5, source.lifestealProb + 0.3);
+      // 1. 회유 30% 증가 (2턴 지속 처리)
+      if (source.찬란한위명Buff > 0) {
+        source.찬란한위명Buff = 2; // 이미 버프가 있다면 턴수만 갱신
+        logAction("✨ [찬란한 위명] 회유 증가 버프 지속시간이 2턴으로 갱신되었습니다.");
+      } else {
+        var prevLife = source.lifestealProb;
+        source.lifestealProb = Math.min(0.5, source.lifestealProb + 0.3); // 상한선 50%
+        source.찬란한위명LifestealAmt = source.lifestealProb - prevLife;  // 실제 증가한 수치 기록
+        source.찬란한위명Buff = 2; // 2턴 지속
+        logAction("✨ [찬란한 위명] 2턴 동안 회유가 " + Math.round(source.찬란한위명LifestealAmt * 100) + "% 증가합니다.");
+      }
+
+      // 2. 랜덤 적군 2명에게 220% 병기 피해
       for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
         dealDamage(source, aliveEnemies[t], 2.2, '병기', '찬란한 위명', allies, enemies);
       }
@@ -345,18 +502,28 @@ function castActiveSkill(skill, source, allies, enemies) {
       var finalTarget = frontRow.length > 0 ? frontRow[0] : target;
       dealDamage(source, finalTarget, 4.532, '병기', '응전', allies, enemies);
       break;
-    case "기풍당당":
-      for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
-          dealDamage(source, aliveEnemies[t], 1.8, '병기', '기풍당당', allies, enemies);
-          aliveEnemies[t].stormState = 2;
-          onDebuffInflicted(source, aliveEnemies[t], allies, enemies);
-      }
-      break;
     case "민중 봉기":
-      for (var t = 0; t < Math.min(2, aliveEnemies.length); t++) {
-        dealDamage(source, aliveEnemies[t], 1.545, '병기', '민중 봉기', allies, enemies);
-        aliveEnemies[t].grainExhaustState = 1;
-        onDebuffInflicted(source, aliveEnemies[t], allies, enemies);
+      var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
+        
+      // 1. 타겟팅: 엔진 공식 가중치 랜덤 함수를 사용하여 2명 추출
+      var targets = getWeightedRandomTargets(aliveEnemies, 2);
+
+      for (var i = 0; i < targets.length; i++) {
+        var t = targets[i];
+            
+        // 2. 154.5% 병기 피해
+        dealDamage(source, t, 1.545, '병기', '민중 봉기', allies, enemies);
+            
+        // 3. 엔진 공식 군량 고갈(grainExhaustState) 부여 (1턴)
+        if (t.hp > 0) { // 타격 후 살아있을 경우에만 디버프 부여
+          t.grainExhaustState = 1;
+          logAction("🌾 [민중 봉기] " + t.name + "에게 '군량 고갈' 상태를 1턴 부여합니다.");
+                
+          // 4. 엔진 표준 디버프 발생 훅(Hook) 호출 (독설가, 세금 과징수 등과 연계)
+          if (typeof onDebuffInflicted === "function") {
+            onDebuffInflicted(source, t, allies, enemies);
+          }
+        }
       }
       break;
     case "강철의 의지":
@@ -368,18 +535,15 @@ function castActiveSkill(skill, source, allies, enemies) {
         var ally = targetAllies[t];
         
         if (ally.강철의의지Buff > 0) {
-          ally.강철의의지Buff = 2; // 이미 버프가 있다면 턴수만 갱신 (수치 중복 적용 방지)
+          ally.강철의의지Buff = 2; // 턴수만 갱신
           logAction("🛡️ [강철의 의지] " + ally.name + "의 버프 지속시간이 2턴으로 갱신되었습니다.");
         } else {
-          var prevDouble = ally.doubleAttackProb;
-          var prevLife = ally.lifestealProb;
+          // 💥 [상한선 제거] 더 이상 최고 확률에 제한을 받지 않고 정직하게 증가함
+          ally.doubleAttackProb += 0.45;
+          ally.lifestealProb += 0.20;
           
-          ally.doubleAttackProb = Math.min(0.8, ally.doubleAttackProb + 0.45);
-          ally.lifestealProb = Math.min(0.5, ally.lifestealProb + 0.2);
-          
-          // 상한선(0.8, 0.5) 때문에 '실제로 올라간 수치'만큼만 기록
-          ally.강철의의지DoubleAmt = ally.doubleAttackProb - prevDouble;
-          ally.강철의의지LifestealAmt = ally.lifestealProb - prevLife;
+          ally.강철의의지DoubleAmt = 0.45; 
+          ally.강철의의지LifestealAmt = 0.20;
           ally.강철의의지Buff = 2;
           
           logAction("🛡️ [강철의 의지] " + ally.name + "에게 2턴간 연타 및 회유 증가 버프를 부여합니다.");
@@ -525,7 +689,61 @@ function castActiveSkill(skill, source, allies, enemies) {
           onDebuffInflicted(source, enemy, allies, enemies);
         }
       });
-      break;  
+      break;
+    case "기풍당당":
+      // 1. 타겟팅 수정: 엔진 공식 속성인 e.position 사용
+      var backline = enemies.filter(function(e) { return e.position === '후열' && e.hp > 0; });
+      var targetPool = backline.length > 0 ? backline : enemies.filter(function(e) { return e.hp > 0; });
+      
+      if (targetPool.length > 0) {
+        // 엔진 표준 랜덤 타겟팅 함수 적용
+        var target = getWeightedRandomTargets(targetPool, 1)[0];
+        
+        // 2. 병기 피해 240%
+        dealDamage(source, target, 2.4, '병기', '기풍당당', allies, enemies);
+        
+        // 3. 조건부 선공 감소 체크 (타격 후 대상이 살아있을 때만)
+        if (target.hp > 0) {
+          if (target.stormState > 0) {
+            target.speed -= 25;
+            target.기풍당당SpeedDebuff = 2; // 2턴 지속 기록
+            logAction("📉 [기풍당당] 목표가 이미 '폭풍' 상태이므로 선공을 25 감소시킵니다.");
+          }
+          
+          target.stormState = 2; // 폭풍 부여
+          logAction("🌪️ [기풍당당] " + target.name + "에게 '폭풍' 상태(2턴)를 부여합니다.");
+          
+          // 4. 엔진 표준 디버프 발생 훅(Hook) 추가 호출
+          if (typeof onDebuffInflicted === "function") {
+            onDebuffInflicted(source, target, allies, enemies);
+          }
+        }
+      }
+      break;
+    case "퇴로 매복":
+      logAction("🏹 [퇴로 매복] 매복을 시작합니다! 4회 공격을 시도합니다.");
+      
+      // 1. 발동 기간 동안 25% 회심 확률 적용 (엔진 표준 시스템 활용)
+      var prevCrit = source.critProb;
+      source.critProb += 0.25; 
+      
+      // 2. 4회 발동 루프
+      for (var i = 0; i < 4; i++) {
+        var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
+        if (aliveEnemies.length === 0) break; // 적이 전멸하면 즉시 중단
+        
+        // 3. 엔진 공식 타겟팅: 진형 피격률(hitWeight)이 반영된 가중치 랜덤 타겟팅
+        var target = getWeightedRandomTargets(aliveEnemies, 1)[0];
+        
+        if (target) {
+          // 4. 110% 병기 피해
+          dealDamage(source, target, 1.1, '병기', '퇴로 매복', allies, enemies);
+        }
+      }
+      
+      // 5. 타격 종료 후 회심 확률을 원래대로 복구
+      source.critProb = prevCrit;
+      break;      
   }
 }
 
@@ -626,6 +844,23 @@ function decayStatusEffects(characters) {
             logAction("🔻 [버프 종료] " + c.name + "의 '파죽지세' 지속시간이 만료되어 회심 확률이 감소했습니다.");
         }
     }
+    // 찬란한 위명 버프 차감 및 만료 처리
+    if (c.찬란한위명Buff > 0) {
+      c.찬란한위명Buff--;
+      if (c.찬란한위명Buff === 0) {
+        c.lifestealProb -= (c.찬란한위명LifestealAmt || 0);
+        c.찬란한위명LifestealAmt = 0; // 기록 초기화
+        logAction("🔻 [버프 종료] " + c.name + "의 '찬란한 위명' 지속시간이 만료되어 회유(흡혈)가 원상 복구되었습니다.");
+      }
+    }
+    // 경무장 2턴 버프 차감 및 만료 처리
+    if (c.경무장Buff > 0) {
+      c.경무장Buff--;
+      if (c.경무장Buff === 0) {
+        c.damageTakenMod += 0.2;
+        logAction("🔻 [버프 종료] " + c.name + "의 '경무장' 지속시간이 만료되어 받는 피해가 원상 복구되었습니다.");
+      }
+    }
     // 2. 원문사극 다중 스택 차감
     if (c.원문사극Buff && c.원문사극Buff.length > 0) {
         for (var i = c.원문사극Buff.length - 1; i >= 0; i--) {
@@ -637,28 +872,77 @@ function decayStatusEffects(characters) {
             }
         }
     }
-    // 3. 충신의 기재 다중 스택 차감
-    if (c.충신의기재Buff && c.충신의기재Buff.length > 0) {
-        for (var i = c.충신의기재Buff.length - 1; i >= 0; i--) {
-            c.충신의기재Buff[i]--;
-            if (c.충신의기재Buff[i] <= 0) {
-                c.충신의기재Buff.splice(i, 1);
-                c.intel -= 10;
-                logAction("🔻 [버프 종료] " + c.name + "의 '충신의 기재' 1스택이 만료되어 지력이 감소했습니다.");
-            }
-        }
-    }
     if (c.탈주병State > 0) c.탈주병State--;
-    if (c.순간돌습Debuff > 0) {
+     if (c.순간돌습Debuff > 0) {
       c.순간돌습Debuff--;
       if (c.순간돌습Debuff === 0) c.command += 30.9;
     }
-    if (c.철기병돌격Buff > 0) {
+     if (c.철기병돌격Buff > 0) {
       c.철기병돌격Buff--;
       if (c.철기병돌격Buff === 0) {
         c.critProb -= 0.206;
         logAction("🔻 [버프 종료] " + c.name + "의 '철기병 돌격'이 만료되어 회심 확률이 원상 복구되었습니다.");
       }
     }
+    // 🛡️ [패치] '임시' 병법 만료 처리
+    if (c.imsiBuffTurns > 0) {
+        c.imsiBuffTurns--;
+        if (c.imsiBuffTurns === 0) {
+            c.damageTakenMod += 0.055; // 원상 복구
+            logAction("🔻 [버프 종료] " + c.name + "의 '임시' 지속시간이 만료되어 받는 피해가 원상 복구되었습니다.");
+        }
+    }
+    // 📉 [신규 패치] '저력' 병법 만료 처리
+    if (c.jeoryeokDebuffTurns > 0) {
+        c.jeoryeokDebuffTurns--;
+        if (c.jeoryeokDebuffTurns === 0) {
+            c.damageDealtMod += 0.15; // 깎였던 데미지 15% 원상 복구
+            logAction("📈 [디버프 종료] " + c.name + "의 '저력' 딜 감소 효과가 만료되어 주는 피해가 원상 복구되었습니다.");
+        }
+    }
+    // 기풍당당 선공 감소 효과 차감 및 만료 처리
+    if (c.기풍당당SpeedDebuff > 0) {
+      c.기풍당당SpeedDebuff--;
+      if (c.기풍당당SpeedDebuff === 0) {
+        c.speed += 25;
+        logAction("📈 [버프 종료] '기풍당당'의 선공 감소 효과가 만료되어 " + c.name + "의 선공이 원상 복구되었습니다.");
+      }
+    }
+
+    // 🔴 [고유병법 신규 버프 만료 청소]
+    if (c.호가십팔박Debuff > 0) { c.호가십팔박Debuff--; if (c.호가십팔박Debuff === 0) c.intel += 30; }
+    if (c.태평도법Debuff > 0) { c.태평도법Debuff--; if (c.태평도법Debuff === 0) c.tacticMods.activeDmgTaken -= 0.10; }
+    if (c.지군Debuff > 0) { c.지군Debuff--; if (c.지군Debuff === 0) c.damageDealtMod += 0.10; }
+    if (c.궁술Buff > 0) c.궁술Buff--;
+    if (c.신무Immunity > 0) c.신무Immunity--;
+    if (c.장검행Buff > 0) c.장검행Buff--;
+    
+    ['무하Buff', '청낭경Buff', '왕예Buff'].forEach(function(buffName) {
+        if (c[buffName] && c[buffName].length > 0) {
+            for (var i = c[buffName].length - 1; i >= 0; i--) {
+                c[buffName][i]--;
+                if (c[buffName][i] <= 0) {
+                    c[buffName].splice(i, 1);
+                    if (buffName === '무하Buff') c.damageTakenMod += 0.07;
+                    if (buffName === '청낭경Buff') c.damageDealtMod -= 0.06;
+                    if (buffName === '왕예Buff') c.activeRateBonus -= 0.04;
+                }
+            }
+        }
+    });
+
+    if (c.신속기습ForceBuff > 0) {
+        c.force -= c.신속기습ForceBuff;
+        c.신속기습ForceBuff = 0;
+    }
+    if (c.신속기습DmgBuff > 0) {
+        c.damageDealtMod -= c.신속기습DmgBuff;
+        c.critProb -= c.신속기습DmgBuff;
+        c.신속기습DmgBuff = 0;
+        logAction("🔻 [버프 종료] " + c.name + "의 '신속기습' 효과가 만료되었습니다.");
+    }
+
+    if (c.폐월Buff > 0) { c.폐월Buff--; if (c.폐월Buff === 0) c.tacticMods.weaponDmg -= 0.15; }
+    if (c.상련Buff > 0) { c.상련Buff--; if (c.상련Buff === 0) c.pierce -= 0.09; }
   });
 }

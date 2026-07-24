@@ -74,20 +74,39 @@ function isActiveSkill(skillName) {
   return skillTypes[skillName] === "액티브";
 }
 
-function dealDamage(source, target, coef, type, skillName, allies, enemies) {
+function dealDamage(source, target, coef, type, skillName, allies, enemies, isTransfer) {
   if (source.hp <= 0 || target.hp <= 0) return 0;
   
   // 1. 방어막, 회피, 백리의성 처리
   var hasSeoseong = allies.find(function(c) { return c.skills.indexOf("백리의성") !== -1 && c.hp > 0; });
-  if (hasSeoseong && typeof turn !== 'undefined' && turn <= 4 && Math.random() < 0.25) {
-    target.shieldStacks++;
-    logAction("🧱 [백리의성] 서성의 지휘! " + target.name + "이(가) 피격 직전 방어막 1스택을 획득했습니다.");
+  if (hasSeoseong && typeof turn !== 'undefined' && turn <= 4) {
+    // 🧱 [역산 패치] 통솔 비례 방어막 획득 확률 (기본 25% + 통솔 1당 0.05% 증가)
+    var blockProb = 0.25 + (hasSeoseong.command * 0.0005);
+    if (Math.random() < blockProb) {
+      target.shieldStacks++;
+      logAction("🧱 [백리의성] 서성의 지휘! " + target.name + "이(가) 피격 직전 방어막 1스택을 획득했습니다. (확률: " + (blockProb*100).toFixed(1) + "%)");
+    }
   }
 
   var dodgeChance = target.dodgeProb;
   if (target.name === "조운") dodgeChance = Math.max(dodgeChance, 0.35);
   
+  // 🛡️ [패치] '금고'(4턴간), '승민'(전열) 피신(회피) 증가 적용
+  if (target.tacticMods) {
+      if (typeof turn !== 'undefined' && turn <= 4) dodgeChance += (target.tacticMods.dodgeTurn4 || 0);
+      if (target.position === '전열') dodgeChance += (target.tacticMods.dodgeIfFront || 0);
+  }
+
   var ignoreDodge = (source.백발백중 > 0);
+  
+  // 🎯 [패치] '호익': 매 턴 자신이 처음 주는 피해 80% 확률로 회피 불가
+  if (!ignoreDodge && source.tacticMods && source.tacticMods.ignoreDodgeFirstHit && source.damageDealtThisTurn === 0) {
+      if (Math.random() < 0.8) {
+          ignoreDodge = true;
+          logAction("🎯 [호익] " + source.name + "의 타격은 피신(회피)할 수 없습니다!");
+      }
+  }
+
   if (!ignoreDodge && Math.random() < dodgeChance) {
     logAction("🛡️ [회피] " + target.name + "이(가) " + source.name + "의 '" + skillName + "' 공격을 회피했습니다!");
     if (target.name === "조운" && target.용담Count < 7) {
@@ -103,11 +122,14 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
   }
 
   var shieldMult = 1.0;
-  if (target.shieldStacks > 0) {
-    target.shieldStacks--;
-    var blockRate = 0.7 + Math.random() * 0.2;
+  // 🛡️ [방어 및 방어파괴 패치] 공격자가 방어파괴(shieldPierce)를 가지지 않았을 때만 방어 발동
+  if (target.shieldStacks > 0 && !source.shieldPierce) {
+    target.shieldStacks--; // 스택 차감
+    var blockRate = 0.7 + Math.random() * 0.2; // 70~90% 감소
     shieldMult = 1.0 - blockRate;
-    logAction("🧱 [방어막] " + target.name + "의 방어막 작동! 피해가 " + (blockRate*100).toFixed(1) + "% 감소합니다.");
+    logAction("🧱 [방어막] " + target.name + "의 방어막 작동! 피해가 " + (blockRate*100).toFixed(1) + "% 감소합니다. (남은 스택: " + target.shieldStacks + ")");
+  } else if (target.shieldStacks > 0 && source.shieldPierce) {
+    logAction("🔨 [방어파괴] " + source.name + "의 공격이 " + target.name + "의 방어막을 무시하고 타격합니다!");
   }
 
   var relationMult = 1.0;
@@ -141,6 +163,9 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
       curPierce += (source.tacticMods.stackPierce * 0.015); // '득세' 스택 (관통 증가)
   }
 
+  // 🔴 ['후기' 누락 반영] 후기 스택당 묘책 확률 3% 증가 적용
+  if (source.hugiStacks > 0) curSpellCrit += (source.hugiStacks * 0.03);
+
   var defCommand = target.command - (target.floodState > 0 ? 20 : 0);
   if (curPierce > 0) defCommand *= (1 - curPierce);
   var defIntel = target.intel - (target.fireState > 0 ? 15 : 0);
@@ -148,8 +173,12 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
 
   // 2. 기본 대미지 및 크리티컬 연산
   var baseDmg = 0;
-  var critMult = (source.magicState > 0) ? 1.35 : 1.5;
+  var critMult = 1.5;
   if (source.critDamageMod) critMult += source.critDamageMod;
+  
+  // 🔮 [요술 패치] 요술(magicState)에 걸려있으면 회심/묘책 피해 배율 15% 감소
+  if (source.magicState > 0) critMult -= 0.15;
+
   var isCrit = false;
   var isSpellCrit = false;
 
@@ -171,8 +200,10 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
     }
   }
 
-  var troopMod = Math.sqrt(source.hp) / 50.0;
-  baseDmg *= troopMod;
+  // ⚔️ [패치] 병사 수 비례 계수 제거 및 고정 상수 도입
+  // 기존 10,000 병력 기준 계수인 2.0을 고정값으로 적용합니다. (전체 데미지 밸런스를 맞출 때 이 2.0을 수정하세요)
+  var scaleConstant = 2.0;
+  baseDmg *= scaleConstant;
 
   // =================================================
   // 🔴 [병법 패치] 공용 병법 피해/피격 증감 합연산 적용
@@ -193,13 +224,36 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
   totalDmgMod += (source.damageDealtMod - 1.0); 
   totalDmgMod += (target.damageTakenMod - 1.0); 
 
+// 🟢 [스택/트리거형 8종 동기화] 스택형 병법 실시간 반영
+  if (source.jeolbongStacks > 0) totalDmgMod += (source.jeolbongStacks * 0.03); 
+  if (target.jeokyongStacks > 0) totalDmgMod += (target.jeokyongStacks * 0.03); // 피뎀증이므로 딜계수 증가
+  if (target.jeokmoStacks > 0) totalDmgMod -= (target.jeokmoStacks * 0.03); // 피뎀감이므로 딜계수 감소
+  if (target.bunchiStacks > 0) totalDmgMod -= (target.bunchiStacks * 0.03); 
+  if (target.wondoBuffTurns > 0) totalDmgMod -= 0.10;
+  
   if (source.tacticMods) {
       totalDmgMod += source.tacticMods.dmgDealt;
-      if (source.pos === '후열') totalDmgMod += source.tacticMods.dmgDealtIfBack;
-      if (source.pos === '전열') totalDmgMod += source.tacticMods.dmgDealtIfFront;
-      if (target.pos === '전열') totalDmgMod += source.tacticMods.dmgDealtToFront;
+      if (source.position === '후열') totalDmgMod += source.tacticMods.dmgDealtIfBack; // 수정 완료 (현기)
+      if (source.position === '전열') totalDmgMod += source.tacticMods.dmgDealtIfFront; // 수정 완료 (적무)
+      if (target.position === '전열') totalDmgMod += source.tacticMods.dmgDealtToFront; // 수정 완료 (군쟁)
+
+      // ⚔️ [패치] '강전': 병력이 가장 높은 적군 타격 시 피해 증가
+      var maxHpEnemy = enemies.filter(function(e) { return e.hp > 0; }).sort(function(a, b) { return b.hp - a.hp; })[0];
+      if (maxHpEnemy && target.name === maxHpEnemy.name) {
+          totalDmgMod += (source.tacticMods.dmgDealtToHighestHp || 0);
+      }
       
-      var targetHasDebuff = target.silence > 0 || target.disarm > 0 || target.fear > 0 || target.weakness > 0 || target.confusion > 0 || target.magicState > 0 || target.stormState > 0 || target.floodState > 0 || target.fireState > 0 || target.threatState > 0;
+      // 🚻 [패치] '불양': 대상이 이성(성별이 다름)일 경우 피해 증가
+      if (source.gender && target.gender && source.gender !== target.gender) {
+          totalDmgMod += (source.tacticMods.dmgDealtToOppositeSex || 0);
+      }
+
+      var targetHasDebuff = target.silence > 0 || target.disarm > 0 || target.fear > 0 || 
+                            target.weakness > 0 || target.confusion > 0 || target.magicState > 0 || 
+                            target.stormState > 0 || target.floodState > 0 || target.fireState > 0 || 
+                            target.threatState > 0 || target.grainExhaustState > 0 || 
+                            target.탈주병State > 0 || target.국색State > 0 || 
+                            target.손견통솔Debuff > 0 || target.순간돌습Debuff > 0 || target.기풍당당SpeedDebuff > 0;
       if (targetHasDebuff) totalDmgMod += source.tacticMods.dmgDealtDebuffed; // 시리
       if (target.command < source.command) totalDmgMod += source.tacticMods.dmgDealtToLowerCommand; // 속오
 
@@ -220,8 +274,8 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
   if (target.tacticMods) {
       totalDmgMod -= target.tacticMods.dmgTaken;
       if (isTurn1to4) totalDmgMod -= target.tacticMods.dmgTakenTurn4;
-      if (target.pos === '후열') totalDmgMod -= target.tacticMods.dmgTakenIfBack;
-      if (target.pos === '전열') totalDmgMod -= target.tacticMods.dmgTakenIfFront;
+      if (target.position === '후열') totalDmgMod -= target.tacticMods.dmgTakenIfBack;
+      if (target.position === '전열') totalDmgMod -= target.tacticMods.dmgTakenIfFront;
       
       if (type === '병기') {
           totalDmgMod -= target.tacticMods.weaponDmgTaken;
@@ -239,11 +293,34 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
 
   // 3. 기존 상태 이상 증감 로직 병합
   if (target.threatState > 0) totalDmgMod += 0.1;
-  if (source.weakness > 0 && source.regenState <= 0) totalDmgMod -= 0.7;
-  if (target.허점공략State > 0) totalDmgMod -= 0.2756;
+ 
+  // 🔴 [초선 폐월] 이성(성별 다름)에게 받는 피해 감소 및 타격자 추적
+  if (target.skills.indexOf("폐월") !== -1) {
+      // 1. 이성 판정 (초선은 여성이므로 공격자가 남성이면 발동)
+      if (source.gender && target.gender && source.gender !== target.gender) {
+          // 2. 최고 속성 비례 뎀감 (기본 30% + 최고 속성의 0.05% 증가 예시)
+          var maxStat = Math.max(target.force, target.intel, target.command, target.speed);
+          var reduceAmt = 0.30 + (maxStat * 0.0005);
+          totalDmgMod -= reduceAmt;
+      }
+      
+      // 3. 턴 종료 반격을 위해 초선에게 피해를 준 타겟 목록에 추가
+      if (!target.폐월Targets) target.폐월Targets = [];
+      if (target.폐월Targets.indexOf(source) === -1) {
+          target.폐월Targets.push(source);
+      }
+  }
+
+  if (target.허점공략State > 0 && target.허점공략ReduceAmt) totalDmgMod -= target.허점공략ReduceAmt;
   if (target.흥왕의위업State > 0) totalDmgMod -= 0.14;
   if (target.skills.indexOf("위기의 결전") !== -1 && skillName === '일반 공격') totalDmgMod -= 0.212;
   if (target.국색State > 0) totalDmgMod += 0.2;
+  if (target.skills.indexOf("양번 사수") !== -1 && isOdd) {
+      // 🛡️ [역산 패치] 기본 수치 + 통솔 비례 추가 뎀감 (통솔 1당 0.05% 증가)
+      var cmdBonus = target.command * 0.0005;
+      if (source.position === '후열') totalDmgMod -= (0.3 + cmdBonus);
+      else if (source.position === '전열') totalDmgMod -= (0.15 + cmdBonus);
+  }
   
   if (skillName === '척살') {
       var hasDebuff = target.silence > 0 || target.disarm > 0 || target.fear > 0 || target.weakness > 0 || target.confusion > 0 || target.magicState > 0 || target.stormState > 0 || target.floodState > 0 || target.fireState > 0 || target.grainExhaustState > 0 || target.threatState > 0;
@@ -257,13 +334,73 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
 
   // 4. 최종 데미지 적용
   var finalDmg = Math.round(baseDmg + (Math.random() * 80 - 40));
-  if (finalDmg < 10) finalDmg = 10;
-  finalDmg = Math.min(finalDmg, target.hp);
 
+  // 🥀 [허약 패치] 허약(weakness) 상태일 경우 주는 최종 피해 70% 감소
+  if (source.weakness > 0 && source.regenState <= 0) {
+      finalDmg = Math.floor(finalDmg * 0.3);
+      logAction("🥀 [허약] " + source.name + "의 최종 피해가 70% 감소했습니다.");
+  }
+
+  if (finalDmg < 10) finalDmg = 10;
+  // 🔴 [고유병법 특수 피해 판정 기믹] (HP 차감 전에 계산)
+  if (source.floodState > 0 && target.strategies && target.strategies.indexOf("의성") !== -1) {
+      finalDmg = Math.floor(finalDmg * 0.92); // 홍수 대상에게 피격 시 -8%
+  }
+  if (type === '병기' && source.장검행Buff > 0) {
+      finalDmg = Math.floor(finalDmg * 1.4);
+      source.장검행Buff = 0;
+      logAction("💥 [고유병법] '장검행' 폭발! 이번 병기 피해가 40% 증폭되었습니다.");
+  }
+
+  finalDmg = Math.min(finalDmg, target.hp);
   target.hp -= finalDmg;
   
+  // 🔴 [타격 적중 직후 트리거 발동]
+  if (target.hp > 0 && target.hp < target.maxHp * 0.5 && target.strategies && target.strategies.indexOf("호신") !== -1 && !target.호신Triggered) {
+      target.호신Triggered = true;
+      logAction("📖 [고유병법] '호신' 발동! 정보의 병력이 50% 미만이 되어 체력 회복 및 뎀감(12%) 획득.");
+      heal(target, target, 2.0, "호신");
+      target.damageTakenMod -= 0.12;
+  }
+  
+  if (type === '책략' && source.strategies && source.strategies.indexOf("장검행") !== -1) {
+      source.장검행Buff = 1;
+      logAction("📖 [고유병법] '장검행' 발동! 다음 병기 피해가 40% 증가합니다.");
+  }
+  
+  if (type === '책략' && target.strategies && target.strategies.indexOf("왕예") !== -1 && Math.random() < 0.5) {
+      if (!target.왕예Buff) target.왕예Buff = [];
+      if (target.왕예Buff.length < 2) {
+          target.왕예Buff.push(2);
+          target.activeRateBonus += 0.04;
+          logAction("📖 [고유병법] '왕예' 발동! 관우의 액티브 발동률이 4% 증가합니다.");
+      } else {
+          for(var i=0; i<target.왕예Buff.length; i++) if(target.왕예Buff[i] < 2) { target.왕예Buff[i] = 2; break; }
+      }
+  }
+
   // 🩸 [부상병 패치] 대미지의 15%는 전사(회복 불가), 85%만 부상병으로 누적
   target.woundedHp = (target.woundedHp || 0) + Math.round(finalDmg * 0.85);
+
+  // 🟢 [스택/트리거형 8종 동기화] 타격 직후 스택 누적 판별 (최대 5스택)
+  if (finalDmg > 0 && target.hp > 0) {
+      if (type === '병기' && allies.some(function(c) { return c.tacticMods && c.tacticMods.jeokyong; })) {
+          if (target.jeokyongStacks < 5) target.jeokyongStacks++;
+      }
+      if (type === '책략' && enemies.some(function(c) { return c.tacticMods && c.tacticMods.jeokmo; })) {
+          if (target.jeokmoStacks < 5) target.jeokmoStacks++;
+      }
+      if ((skillName === '일반 공격' || skillName === '반격') && target.tacticMods && target.tacticMods.jeolbong) {
+          if (target.jeolbongStacks < 5) target.jeolbongStacks++;
+      }
+      if (isCrit && source.tacticMods && source.tacticMods.gongjeok) {
+          if (source.gongjeokStacks < 5) {
+              source.gongjeokStacks++;
+              source.force += 5; // 1스택당 무력 5 증가
+              logAction("🔥 [공적] " + source.name + "의 회심 발동! 무력이 상승합니다. (현재 " + source.gongjeokStacks + "스택)");
+          }
+      }
+  }
 
   source.totalDamageDealt += finalDmg;
   target.totalDamageTaken += finalDmg;
@@ -279,16 +416,19 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
   // =================================================
   // 🔴 [병법 패치] 타격 직후 병법 스택 중첩 획득 (가시성 추가)
   // =================================================
-  if (source.tacticMods) {
-    if (type === '병기' && source.strategies.indexOf("구전") !== -1 && source.tacticMods.stackWeaponDmg < 5) {
+  if (source.tacticMods && source.strategies) {
+    // 💡 ES5 map을 사용하여 모든 병법 이름의 공백을 제거한 안전한 배열 생성
+    var safeStrats = source.strategies.map(function(s) { return s ? s.toString().trim() : ""; });
+
+    if (type === '병기' && safeStrats.indexOf("구전") !== -1 && source.tacticMods.stackWeaponDmg < 5) {
       source.tacticMods.stackWeaponDmg++;
       logAction("  └ 📈 [구전 중첩] " + source.name + "의 병기 피해 1.8% 증가! (스택: " + source.tacticMods.stackWeaponDmg + "/5)");
     }
-    if (type === '책략' && source.strategies.indexOf("탈계") !== -1 && source.tacticMods.stackSpellDmg < 8) {
+    if (type === '책략' && safeStrats.indexOf("탈계") !== -1 && source.tacticMods.stackSpellDmg < 8) {
       source.tacticMods.stackSpellDmg++;
       logAction("  └ 📈 [탈계 중첩] " + source.name + "의 책략 피해 1% 증가! (스택: " + source.tacticMods.stackSpellDmg + "/8)");
     }
-    if (source.strategies.indexOf("득세") !== -1 && source.tacticMods.stackPierce < 5) {
+    if (safeStrats.indexOf("득세") !== -1 && source.tacticMods.stackPierce < 5) {
       source.tacticMods.stackPierce++;
       logAction("  └ 📈 [득세 중첩] " + source.name + "의 관통 1.5% 증가! (스택: " + source.tacticMods.stackPierce + "/5)");
     }
@@ -314,9 +454,12 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
     source.pierce = prevPierce;
   }
 
-// 🔴 7. 흡혈 로직 독립 및 부상병 제한
-  if (type === '병기' && source.lifestealProb > 0) {
-    var lsAmt = Math.round(finalDmg * source.lifestealProb);
+  // 🩸 [패치] '고군': 홀수 턴 회유 증가
+  var curLifesteal = source.lifestealProb;
+  if (source.tacticMods && isOdd) curLifesteal += (source.tacticMods.lifestealOdd || 0); 
+
+  if (type === '병기' && curLifesteal > 0) {
+    var lsAmt = Math.round(finalDmg * curLifesteal);
     
     // ✅ (수정 후) Math.max(0, ...) 추가
     var availableWounded = Math.max(0, Math.round(source.woundedHp || 0));
@@ -327,8 +470,13 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
     source.totalHealingDone += actualLs;
     if (actualLs > 0) logAction("💚 [회유] " + source.name + "이(가) 병력을 " + actualLs + " 회복했습니다. (잔여 부상병: " + source.woundedHp + ")");
   }
-  if (type === '책략' && source.psyLifestealProb > 0) {
-    var lsAmt = Math.round(finalDmg * source.psyLifestealProb);
+
+  // 🔮 [패치] '위지': 짝수 턴 심리공격 증가
+  var curPsyLifesteal = source.psyLifestealProb;
+  if (source.tacticMods && isEven) curPsyLifesteal += (source.tacticMods.psyLifestealEven || 0);
+  
+  if (type === '책략' && curPsyLifesteal > 0) {
+    var lsAmt = Math.round(finalDmg * curPsyLifesteal);
     
     // ✅ (수정 후) Math.max(0, ...) 추가
     var availableWounded = Math.max(0, Math.round(source.woundedHp || 0));
@@ -415,11 +563,77 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
       var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
       var targetEnemies = getWeightedRandomTargets(aliveEnemies, 2); 
       for(var t=0; t < targetEnemies.length; t++) {
-          targetEnemies[t].damageTakenMod = Math.min(2.0, targetEnemies[t].damageTakenMod + 0.1); 
+          // 🛡️ [역산 패치] 통솔 비례 피해 증가 디버프 (기본 10% + 통솔 1당 0.03% 추가)
+          var increaseAmt = 0.1 + (target.command * 0.0003);
+          targetEnemies[t].damageTakenMod = Math.min(2.0, targetEnemies[t].damageTakenMod + increaseAmt); 
+          logAction("🛡️ [침착한 지휘] " + targetEnemies[t].name + "의 받는 피해가 " + (increaseAmt*100).toFixed(1) + "% 증가합니다.");
+          
           if (Math.random() < 0.6) {
-              aliveEnemies[t].disarm = 2; 
-              logAction("🛡️ [침착한 지휘] " + aliveEnemies[t].name + "에게 무장해제를 2턴간 부여합니다.");
+              targetEnemies[t].disarm = 2; 
+              logAction("🛡️ [침착한 지휘] " + targetEnemies[t].name + "에게 무장해제를 2턴간 부여합니다.");
           }
+      }
+  }
+
+  // 🔗 [피해 전달 패치] 최초 타격일 때만 전달 로직 발동 (무한 루프 방지)
+  if (!isTransfer && source.damageTransfer > 0) {
+      // 타겟을 제외한 살아있는 랜덤 적군 1명 탐색
+      var aliveEnemies = enemies.filter(function(e) { return e.hp > 0 && e.name !== target.name; });
+      if (aliveEnemies.length > 0) {
+          var transferTarget = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+          var transferCoef = coef * source.damageTransfer; // 전달 계수 적용
+          
+          logAction("🔗 [피해 전달] " + target.name + "에게 적중한 공격이 " + transferTarget.name + "에게 전달됩니다!");
+          
+          // 방어 무시 등을 반영하기 위해 특수 파라미터(isTransfer = true)를 넣고 재귀 호출
+          dealDamage(source, transferTarget, transferCoef, type, skillName + "(전달)", allies, enemies, true);
+      }
+  }
+
+  // 🔴 [백전불태] 타겟(피격자) 피격 시 발동
+  // Combat.js의 파라미터를 활용: target이 속한 팀 배열 찾기
+  var targetTeam = (allies.indexOf(target) !== -1) ? allies : enemies;
+  var hasBaekJeon = targetTeam.some(function(c) { return c.skills.indexOf("백전불태") !== -1 && c.hp > 0; });
+  
+  if (hasBaekJeon && target.hp > 0) {
+      var aliveTeam = targetTeam.filter(function(a) { return a.hp > 0; });
+      
+      // 통솔, 지력, 무력이 각각 가장 높은 아군 찾기
+      var maxCmdAlly = aliveTeam.slice().sort(function(a, b) { return b.command - a.command; })[0];
+      var maxIntAlly = aliveTeam.slice().sort(function(a, b) { return b.intel - a.intel; })[0];
+      var maxForAlly = aliveTeam.slice().sort(function(a, b) { return b.force - a.force; })[0];
+
+      var effects = [];
+      
+      // 1. 피격자(target)가 팀 내 통솔 1위일 경우 개별 판정
+      if (target === maxCmdAlly && Math.random() < 0.60) {
+          if ((target.백전통솔Stack || 0) < 8) {
+              target.command += 7;
+              target.백전통솔Stack = (target.백전통솔Stack || 0) + 1;
+              effects.push("통솔 +7 (스택: " + target.백전통솔Stack + "/8)");
+          }
+      }
+      
+      // 2. 피격자(target)가 팀 내 지력 1위일 경우 개별 판정
+      if (target === maxIntAlly && Math.random() < 0.60) {
+          if ((target.백전지력Stack || 0) < 8) {
+              target.intel += 7;
+              target.백전지력Stack = (target.백전지력Stack || 0) + 1;
+              effects.push("지력 +7 (스택: " + target.백전지력Stack + "/8)");
+          }
+      }
+      
+      // 3. 피격자(target)가 팀 내 무력 1위일 경우 개별 판정
+      if (target === maxForAlly && Math.random() < 0.60) {
+          if ((target.백전무력Stack || 0) < 8) {
+              target.force += 7;
+              target.백전무력Stack = (target.백전무력Stack || 0) + 1;
+              effects.push("무력 +7 (스택: " + target.백전무력Stack + "/8)");
+          }
+      }
+      
+      if (effects.length > 0) {
+          logAction("🛡️ [백전불태] " + target.name + " 피격 반응! 최고 스탯 증가: " + effects.join(", "));
       }
   }
 
@@ -429,26 +643,34 @@ function dealDamage(source, target, coef, type, skillName, allies, enemies) {
 function heal(source, target, coef, skillName, teamArray) {
   if (!source || !target || source.hp <= 0 || target.hp <= 0) return 0;
   
-  var troopMod = Math.sqrt(source.hp) / 50.0; 
-  var healAmt = Math.round(source.intel * coef * troopMod);
-  if (skillName === "강동 제패") healAmt = Math.round(source.force * coef * troopMod);
+  // 💚 [패치] 병사 수 비례 힐량 계수 제거 및 고정 상수(2.0) 도입
+  var scaleConstant = 1.0;
+  var healAmt = Math.round(source.intel * coef * scaleConstant);
+  if (skillName === "강동 제패") healAmt = Math.round(source.force * coef * scaleConstant);
 
-  // =================================================
+  // 🔴 [전쟁 조달 패치] 지력과 무력 두 스탯을 동시에 합산하여 치유량에 반영
+  if (skillName === "전쟁 조달" || skillName === "지혜의 바람") {
+      healAmt = Math.round((source.intel + source.force) * 0.5 * coef * scaleConstant);
+  }
+
+// =================================================
   // 🔴 [병법 패치] 공용 병법 치유량 증감 연산
   // =================================================
   var healMod = 1.0;
   if (source.tacticMods) {
       healMod += source.tacticMods.healDone;
-      if (target.pos === '전열') healMod += source.tacticMods.healDoneToFront; // 연기
+      if (target.position === '전열') healMod += source.tacticMods.healDoneToFront; // 수정 완료 (연기)
   }
   if (target.tacticMods) {
-      healMod += target.tacticMods.healTaken; // 치병
-      if (target.pos === '전열') healMod += target.tacticMods.healTakenIfFront; // 군용
+      healMod += target.tacticMods.healTaken; 
+      if (target.position === '전열') healMod += target.tacticMods.healTakenIfFront; // 수정 완료 (군용)
   }
   healAmt = Math.round(healAmt * healMod);
 
   if (source.strategies && source.strategies.indexOf("인의론") !== -1) {
-    healAmt = Math.round(healAmt * 1.12); 
+    // 💚 [역산 패치] 치유량 증가: 기본 12% + (지력 1당 0.02% 추가)
+    var inEuiRonBonus = 1.0 + 0.12 + (source.intel * 0.0002);
+    healAmt = Math.round(healAmt * inEuiRonBonus);
   }
 
   if (target.grainExhaustState > 0) {
@@ -465,6 +687,19 @@ function heal(source, target, coef, skillName, teamArray) {
   target.hp += finalHealAmt;
   target.woundedHp = Math.max(0, target.woundedHp - finalHealAmt); // 회복된 만큼 부상병 차감
   source.totalHealingDone += finalHealAmt;
+
+  // 🟢 [스택/트리거형 8종 동기화] 치유 발생 시 버프/스택 부여
+  if (finalHealAmt > 0) {
+      if (source.tacticMods && source.tacticMods.wondo) {
+          target.wondoBuffTurns = 1; 
+      }
+      if (source.tacticMods && source.tacticMods.geunseon) {
+          if (source.geunseonStacks < 5) {
+              source.geunseonStacks = (source.geunseonStacks || 0) + 1;
+              source.command += 5;
+          }
+      }
+  }
 
   // 로그에도 제한되어 들어간 실제 회복량(finalHealAmt)을 출력하도록 수정
   logAction("💚 [" + skillName + "] " + source.name + "이(가) " + target.name + "의 병력을 " + finalHealAmt + " 회복시켰습니다. (잔여 부상병: " + target.woundedHp + ")");
@@ -487,12 +722,36 @@ function heal(source, target, coef, skillName, teamArray) {
       }
     }
   }
+
+  // 🔴 [청낭경 치유 연계]
+  if (source.strategies && source.strategies.indexOf("청낭경") !== -1) {
+      if (!target.청낭경Buff) target.청낭경Buff = [];
+      if (target.청낭경Buff.length < 2) {
+          target.청낭경Buff.push(2);
+          target.damageDealtMod += 0.06;
+          logAction("📖 [고유병법] '청낭경' 연계! 화타의 치유를 받은 " + target.name + "의 주는 피해가 6% 증가합니다.");
+      } else {
+          for(var i=0; i<target.청낭경Buff.length; i++) if(target.청낭경Buff[i] < 2) { target.청낭경Buff[i] = 2; break; }
+      }
+  }
+
   return healAmt;
 }
 
-function performNormalAttack(source, target, allies, enemies) {
+function performNormalAttack(source, target, allies, enemies, isCounter) {
   if (source.hp <= 0 || target.hp <= 0) return;
-  
+  source.normalAttackCount = (source.normalAttackCount || 0) + 1; // 궁술을 위한 카운트 누적
+
+  // 🔴 [산림탈기] 평타 전 추가 타격
+  if (source.strategies && source.strategies.indexOf("산림탈기") !== -1 && !isCounter && Math.random() < 0.6) {
+      var aliveEnemies = enemies.filter(function(e) { return e.hp > 0; });
+      if (aliveEnemies.length > 0) {
+          var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+          logAction("📖 [고유병법] '산림탈기' 발동! 감녕이 일반 공격 전 추가 책략 피해를 줍니다.");
+          dealDamage(source, rEnemy, 0.3, '책략', '산림탈기', allies, enemies);
+      }
+  }
+
   var dmgCoef = 1.0;
   var currentForce = source.force; // 버프 연산용 임시 변수
   if (source.skills.indexOf("수전의 제왕") !== -1) {
@@ -501,10 +760,16 @@ function performNormalAttack(source, target, allies, enemies) {
           source.감녕무력Buff.push(2); // 2턴 지속 버프 스택 추가
       }
       currentForce += (source.감녕무력Buff.length * 12);
-      logAction("⚓ [수전의 제왕] 감녕 무력 증가(현재중첩:" + source.감녕무력Buff.length + ") 및 피해 150% 증폭!");
+      if (!isCounter) logAction("⚓ [수전의 제왕] 감녕 무력 증가(현재중첩:" + source.감녕무력Buff.length + ") 및 피해 150% 증폭!");
   }
 
-  dealDamage(source, target, dmgCoef, '병기', '일반 공격', allies, enemies);
+  // ⚔️ [패치] 반격일 경우 스킬명을 '반격'으로 표기
+  var attackName = isCounter ? '반격' : '일반 공격';
+  dealDamage(source, target, dmgCoef, '병기', attackName, allies, enemies);
+  
+  // 🛑 [패치 핵심] 반격으로 때린 평타라면, 추격 전법 및 후속 반격 트리거를 무시하고 즉시 종료!
+  if (isCounter) return;
+
   var targetDeck = enemies;
   var sourceDeck = allies;
 
@@ -516,9 +781,41 @@ function performNormalAttack(source, target, allies, enemies) {
     }
 
     var rate = getSkillProb(skill, source.name);
+
+    // 🔴 [궁술 패치] 추격 확률 및 계수 실시간 펌핑
+    var prevDmgMod = source.damageDealtMod;
+    if (source.궁술Buff > 0) { rate += 0.25; source.damageDealtMod += 0.25; }
+
     if (rate > 0) {
+      // 🔇 신무 침묵 면역 처리 (스킬 쏘기 전)
+      if (source.신무Immunity > 0 && skillTypes[skill] && skillTypes[skill].indexOf("액티브") !== -1 && source.silence > 0) source.silence = 0;
+      
       if (Math.random() < rate) {
         logAction("⚡ [추격 전법] " + source.name + "의 추격 전법 '" + skill + "' 발동!");
+
+        // --- 🔴 [추격 발동 직후 연계 기믹 추가] ---
+        if (source.궁술Buff > 0) source.damageDealtMod = prevDmgMod; // 계수 원상 복구
+
+        if (source.strategies && source.strategies.indexOf("신무") !== -1 && Math.random() < 0.16) {
+            source.신무Immunity = 2;
+            logAction("📖 [고유병법] '신무' 발동! 화웅이 2턴간 침묵에 면역됩니다.");
+        }
+
+        var hasMuha = (source.strategies && source.strategies.indexOf("무하") !== -1);
+        if (!hasMuha) {
+            var maxForceAlly = allies.filter(function(a) { return a.hp > 0; }).sort(function(a, b) { return b.force - a.force; })[0];
+            if (maxForceAlly && maxForceAlly.name === source.name && allies.some(function(a) { return a.strategies && a.strategies.indexOf("무하") !== -1; })) hasMuha = true;
+        }
+        if (hasMuha) {
+            if (!source.무하Buff) source.무하Buff = [];
+            if (source.무하Buff.length < 2) {
+                source.무하Buff.push(2);
+                source.damageTakenMod -= 0.07;
+                logAction("📖 [고유병법] '무하' 연계! " + source.name + "의 받는 피해가 7% 감소합니다.");
+            } else {
+                for(var i=0; i<source.무하Buff.length; i++) if(source.무하Buff[i] < 2) { source.무하Buff[i] = 2; break; }
+            }
+        }
 
         if (skill === "남다른 완력") {
           var extra = (target.force < source.force) ? 0.7 : 0;
@@ -543,15 +840,40 @@ function performNormalAttack(source, target, allies, enemies) {
             onDebuffInflicted(source, target, allies, enemies);
           }
         } else if (skill === "전장 평정") {
-          target.speed = Math.max(0, target.speed - 24);
-          target.force = Math.max(0, target.force - 24);
+          // 📉 [역산 패치] 무력 비례 선공/무력 삭감 (기본 24 + 무력의 10%)
+          var debuffAmt = 24 + (source.force * 0.1);
+          target.speed = Math.max(0, target.speed - debuffAmt);
+          target.force = Math.max(0, target.force - debuffAmt);
           dealDamage(source, target, 1.8, '병기', '전장 평정', allies, enemies);
+          logAction("📉 [전장 평정] 대상의 선공과 무력을 " + debuffAmt.toFixed(1) + " 감소시킵니다.");
           onDebuffInflicted(source, target, allies, enemies);
         } else if (skill === "천리기습") {
-          var lowestSpeedEnemy = targetDeck.filter(function(c) { return c.hp > 0; }).sort(function(x, y) { return x.speed - y.speed; })[0];
+          // 1. 타겟팅: 선공(Speed)이 가장 낮은 적군
+          var aliveEnemies = targetDeck.filter(function(e) { return e.hp > 0; });
+          var lowestSpeedEnemy = aliveEnemies.sort(function(a, b) { return a.speed - b.speed; })[0];
+
           if (lowestSpeedEnemy) {
-            var bonus = (lowestSpeedEnemy.idx > 0) ? 3.8 : 2.8;
-            dealDamage(source, lowestSpeedEnemy, bonus, '병기', '천리기습', allies, enemies);
+            // 2. 피해 계수 계산
+            // 기본 계수: 2.8 (280%)
+            var damageMultiplier = 2.8;
+
+            // 선공 차이 영향: (아군 선공 - 적군 선공) * 0.02 (계수는 밸런스에 맞춰 조정 가능)
+            var speedDiff = Math.max(0, source.speed - lowestSpeedEnemy.speed);
+            var speedBonus = speedDiff * 0.02; 
+    
+            // 최종 계수에 추가
+            damageMultiplier += speedBonus;
+
+            // 3. 후열 추가 피해: 목표가 후열이면 1.0 (100%) 추가
+            if (lowestSpeedEnemy.position === '후열') {
+              damageMultiplier += 1.0;
+              logAction("🎯 [천리기습] 목표가 후열이므로 추가 피해를 가합니다.");
+            }
+
+            logAction("🏹 [천리기습] " + source.name + "의 추격! " + lowestSpeedEnemy.name + "에게 " + (damageMultiplier * 100).toFixed(0) + "%의 병기 피해를 입힙니다.");
+    
+            // 4. 피해 적용
+            dealDamage(source, lowestSpeedEnemy, damageMultiplier, '병기', '천리기습', allies, enemies);
           }
         } else if (skill === "원문사극") {
           dealDamage(source, target, 2.2, '병기', '원문사극', allies, enemies);
@@ -592,13 +914,32 @@ function performNormalAttack(source, target, allies, enemies) {
           source.speed += 30;
           var targets = getWeightedRandomTargets(targetDeck.filter(function(c){return c.hp>0;}), 2);
           for (var t = 0; t < Math.min(2, targets.length); t++) {
-            dealDamage(source, targets[t], 1.8, '병기', '신속전개', allies, enemies);
+            // 💨 [역산 패치] 선공 비례 데미지 증가 (기본 1.8배 + 선공 1당 0.1% 계수 추가)
+            var dmgMod = 1.8 + (source.speed * 0.001);
+            dealDamage(source, targets[t], dmgMod, '병기', '신속전개', allies, enemies);
           }
         } else if (skill === "경무장") {
           var aliveAllies = sourceDeck.filter(function(c) { return c.hp > 0; });
+          
+          // 1. 랜덤 아군 2명 타겟팅을 위해 배열 무작위 섞기 (Shuffle)
+          aliveAllies.sort(function() { return Math.random() - 0.5; });
+          
           for (var t = 0; t < Math.min(2, aliveAllies.length); t++) {
-            aliveAllies[t].shieldStacks++;
-            aliveAllies[t].damageTakenMod = Math.max(0.5, aliveAllies[t].damageTakenMod - 0.2);
+            var ally = aliveAllies[t];
+            
+            // 2. 방어막 1스택 부여
+            ally.shieldStacks++;
+            logAction("🧱 [경무장] " + ally.name + "에게 방어막 1스택을 부여합니다.");
+            
+            // 3. 2턴 동안 받는 피해 20% 감소 (중첩 방지 및 갱신 로직)
+            if (ally.경무장Buff > 0) {
+              ally.경무장Buff = 2; // 이미 버프가 있다면 수치 중복 없이 턴수만 갱신
+              logAction("🛡️ [경무장] " + ally.name + "의 받는 피해 20% 감소 버프가 2턴으로 갱신되었습니다.");
+            } else {
+              ally.damageTakenMod -= 0.2; 
+              ally.경무장Buff = 2; // 2턴 지속 부여
+              logAction("🛡️ [경무장] " + ally.name + "의 받는 피해가 2턴 동안 20% 감소합니다.");
+            }
           }
         } else if (skill === "순간 돌습") {
           target.command = Math.max(0, target.command - 30.9); // 2턴 감소
@@ -626,13 +967,30 @@ function performNormalAttack(source, target, allies, enemies) {
     }
   });
 
+  // 🔴 [패치] 용맹한 삼군 기획 완벽 동기화
   if (source.skills.indexOf("용맹한 삼군") !== -1) {
-    source.damageDealtMod = Math.min(1.36, source.damageDealtMod + 0.06); // 6%씩 최대 36%
+    // 1. 일반 공격 직후 스택 적립 (tacticMods를 활용하여 '병기' 피해만 증가시키도록 수정)
+    if (!source.tacticMods) source.tacticMods = {};
+    if (!source.tacticMods.weaponDmg) source.tacticMods.weaponDmg = 0;
+    
+    if (source.용맹한삼군Stack === undefined) source.용맹한삼군Stack = 0;
+    
+    // 최대 6회까지만 6%씩 중첩 (0.36)
+    if (source.용맹한삼군Stack < 6) {
+      source.용맹한삼군Stack++;
+      source.tacticMods.weaponDmg += 0.06;
+      logAction("📈 [용맹한 삼군] " + source.name + "의 병기 피해가 6% 증가했습니다. (현재 중첩: " + source.용맹한삼군Stack + "/6)");
+    }
+
+    // 2. 일반 공격 횟수 3회 누적 판정 및 폭발
     source.용맹한삼군Count++;
-    if (source.용맹한삼군Count % 3 === 0) {
-      var rEnemy = getWeightedRandomTargets(targetDeck.filter(function(c){return c.hp>0;}), 1)[0];
-      if (rEnemy) {
-        logAction("💰 [용맹한 삼군] 3회 공격 누적! 추가 병기 피해 발동!");
+    if (source.용맹한삼군Count >= 3) {
+      source.용맹한삼군Count = 0; // 3회 달성 시 카운트 초기화
+      
+      var aliveEnemies = targetDeck.filter(function(c) { return c.hp > 0; });
+      if (aliveEnemies.length > 0) {
+        var rEnemy = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+        logAction("⚔️ [용맹한 삼군 폭발] 3회 타격 누적! " + rEnemy.name + "에게 강력한 일격을 가합니다!");
         dealDamage(source, rEnemy, 2.0, '병기', '용맹한 삼군', allies, enemies);
       }
     }
@@ -645,4 +1003,38 @@ function performNormalAttack(source, target, allies, enemies) {
       dealDamage(source, rEnemy, 0.848, '병기', '강습', allies, enemies);
     }
   }
+
+  // [다짐] 일반 공격 후 50% 확률로 병기 피해 1회
+  if (source.다짐 && Math.random() < 0.5) {
+    // targetEnemies -> targetDeck 으로 변경
+    var aliveEnemies = targetDeck.filter(function(e) { return e.hp > 0; });
+    if (aliveEnemies.length > 0) {
+      // 랜덤 적군 단일 목표
+      var randomTarget = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+      logAction("💥 [다짐] " + source.name + "의 다짐 효과가 발동합니다!");
+      
+      // 100% (1.0) 병기 피해
+      dealDamage(source, randomTarget, 1.0, '병기', '결사의 다짐', allies, enemies);
+    }
+  }
+
+  // =========================================================
+  // 🔴 [신규 패치] 범용 반격(Counter-attack) 시스템
+  // =========================================================
+  // 피격자(target) 및 공격자(source)가 모두 살아있고, 피격자가 무장 해제(disarm) 상태가 아니어야 함
+  var totalCounterProb = target.counterProb || 0;
+  if (target.tacticMods && target.tacticMods.counterProb) {
+    totalCounterProb += target.tacticMods.counterProb;
+  }
+      
+  if (totalCounterProb > 0 && target.hp > 0 && source.hp > 0 && target.disarm <= 0) {
+    if ((target.counterCount || 0) < 5) { // 턴당 5회 제한
+      if (Math.random() < totalCounterProb) {
+        target.counterCount = (target.counterCount || 0) + 1;
+        logAction("⚔️ [반격 발동] " + target.name + "이(가) 방어 후 강력한 일격을 가합니다! (턴 내 발동: " + target.counterCount + "/5)");
+        // 반격 시전자(target)가 원래 공격자(source)를 타격. allies와 enemies 배열 순서 교차.
+        performNormalAttack(target, source, enemies, allies, true);
+      }
+    }
+  }  
 }

@@ -12,11 +12,17 @@ function initChar(name, camp, troop, pos, force, intel, command, speed, skills, 
   
   return {
     name: name, camp: camp, troop: troop, position: pos, deck: deck, idx: idx,
-    hp: 10000, maxHp: 10000,
+    gender: (typeof genGenders !== 'undefined' && genGenders[name]) ? genGenders[name] : '남', // 🚻 [패치] 성별 할당
+    hp: 10000, maxHp: 10000, woundedHp: 0, imsiBuffTurns: 0, jeoryeokDebuffTurns: 0,
+    // 🔴 [신규 패치] 스택형 병법 카운터 초기화
+    jeokyongStacks: 0, jeokmoStacks: 0, jeolbongStacks: 0, 
+    gongjeokStacks: 0, bunchiStacks: 0, hugiStacks: 0,
+    wondoBuffTurns: 0, // 원도 뎀감 지속 턴
     force: f, intel: i, command: c, speed: s,
     baseForce: f, baseIntel: i, baseCommand: c, baseSpeed: s,
     skills: skills, strategies: strategies,
     critProb: 0, spellCritProb: 0, dodgeProb: 0, lifestealProb: 0, psyLifestealProb: 0, doubleAttackProb: 0,
+    counterProb: 0, counterCount: 0,
     damageDealtMod: 1.0, damageTakenMod: 1.0, activeRateBonus: 0, pierce: 0, insight: 0,
     silence: 0, disarm: 0, fear: 0, weakness: 0, confusion: 0, 
     magicState: 0, stormState: 0, floodState: 0, fireState: 0, grainExhaustState: 0, threatState: 0,
@@ -31,7 +37,7 @@ function initChar(name, camp, troop, pos, force, intel, command, speed, skills, 
     세금과징수Buff: [], 고육지계Buff: 0, 고육지계ReduceAmt: 0,
     수전의제왕Count: 0,
     충신의기재Count: 0,
-    허점공략State: 0,
+    허점공략State: 0, 허점공략ReduceAmt: 0,
     국색State: 0,
     패잔병척결Count: 0,
     인의론Count: 0, 인의론TurnTriggered: false,
@@ -44,6 +50,9 @@ function initChar(name, camp, troop, pos, force, intel, command, speed, skills, 
     순간돌습Debuff: 0,
     철기병돌격Buff: 0,
     고육지계BondActive: false, 
-    고육지계BondTriggered: false
+    고육지계BondTriggered: false,
+    기풍당당SpeedDebuff: 0,
+    // 🔗 [신규 패치] 피해 전달 및 방어 파괴 상태 초기화
+    damageTransfer: 0, shieldPierce: false
   };
 }
